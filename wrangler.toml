@@ -1,0 +1,12 @@
+name = "chamak-store"
+main = "src/index.js"
+compatibility_date = "2026-10-08"
+
+[assets]
+directory = "./public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chamak-store-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
