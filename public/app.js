@@ -286,13 +286,9 @@ async function navigate(page) {
       await renderStockVerification();
       break;
 
-    case "customerDue":
-      renderComingSoon(
-        "কাস্টমার বাকি",
-        "Customer Due + Collection + Ledger"
-      );
-      break;
-
+    case "customer-due":
+     await renderCustomerDue();
+     break;
     case "supplierDue":
       renderComingSoon(
         "সাপ্লায়ার বাকি",
@@ -3335,7 +3331,991 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+// ============================================================
+// CUSTOMER DUE MODULE
+// ============================================================
 
+let dueCustomers = [];
+let dueAccounts = [];
+let selectedDueCustomer = null;
+
+
+// ============================================================
+// RENDER CUSTOMER DUE
+// ============================================================
+
+async function renderCustomerDue() {
+
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>কাস্টমারের বাকি</h1>
+        <p>Customer Due, Collection ও Ledger</p>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Customer Search</label>
+
+          <input
+            id="dueCustomerSearch"
+            type="text"
+            placeholder="নাম / ফোন দিয়ে খুঁজুন..."
+          >
+        </div>
+
+      </div>
+
+    </section>
+
+
+    <section class="card">
+
+      <div class="section-title">
+        <h2>Customer Due List</h2>
+      </div>
+
+      <div id="dueCustomerList">
+        <div class="empty-state">
+          Loading...
+        </div>
+      </div>
+
+    </section>
+
+
+    <section
+      id="customerDueDetails"
+      class="card"
+      style="display:none;"
+    >
+
+      <div class="section-title">
+        <h2 id="selectedCustomerName">
+          Customer
+        </h2>
+      </div>
+
+
+      <div class="summary-grid">
+
+        <div class="summary-card">
+          <span>Total Due</span>
+          <strong id="customerTotalDue">
+            ৳0.00
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span>Collection</span>
+          <strong id="customerCollectionTotal">
+            ৳0.00
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span>Current Due</span>
+          <strong id="customerCurrentDue">
+            ৳0.00
+          </strong>
+        </div>
+
+      </div>
+
+
+      <hr>
+
+
+      <div class="section-title">
+        <h2>বাকি আদায়</h2>
+      </div>
+
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Collection Amount</label>
+
+          <input
+            id="collectionAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Payment Account</label>
+
+          <select id="collectionAccount">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Date</label>
+
+          <input
+            id="collectionDate"
+            type="date"
+            value="${todayDate()}"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Note</label>
+
+          <input
+            id="collectionNote"
+            type="text"
+            placeholder="Collection note"
+          >
+
+        </div>
+
+      </div>
+
+
+      <div class="form-actions">
+
+        <button
+          id="saveCollectionBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          বাকি আদায় সংরক্ষণ
+        </button>
+
+      </div>
+
+
+      <div id="collectionMessage"></div>
+
+
+      <hr>
+
+
+      <div class="section-title">
+        <h2>Customer Ledger</h2>
+      </div>
+
+
+      <div id="customerLedger">
+        <div class="empty-state">
+          Customer নির্বাচন করুন।
+        </div>
+      </div>
+
+    </section>
+  `;
+
+
+  await loadDueData();
+
+  bindCustomerDueEvents();
+
+  renderDueCustomers();
+}
+
+
+// ============================================================
+// LOAD DATA
+// ============================================================
+
+async function loadDueData() {
+
+  const [
+    customersResponse,
+    accountsResponse
+  ] = await Promise.all([
+
+    fetch("/api/customers"),
+
+    fetch("/api/accounts")
+
+  ]);
+
+
+  if (!customersResponse.ok) {
+    throw new Error(
+      "Customer data load failed"
+    );
+  }
+
+
+  if (!accountsResponse.ok) {
+    throw new Error(
+      "Account data load failed"
+    );
+  }
+
+
+  dueCustomers =
+    await customersResponse.json();
+
+
+  dueAccounts =
+    await accountsResponse.json();
+
+
+  populateCollectionAccounts();
+}
+
+
+// ============================================================
+// COLLECTION ACCOUNTS
+// ============================================================
+
+function populateCollectionAccounts() {
+
+  const select =
+    document.getElementById(
+      "collectionAccount"
+    );
+
+
+  if (!select) return;
+
+
+  const accounts =
+    dueAccounts.filter(account => {
+
+      return [
+        1000,
+        1010,
+        1020,
+        1030
+      ].includes(
+        Number(account.code)
+      );
+
+    });
+
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+
+    `).join("")}
+  `;
+}
+
+
+// ============================================================
+// EVENTS
+// ============================================================
+
+function bindCustomerDueEvents() {
+
+  const search =
+    document.getElementById(
+      "dueCustomerSearch"
+    );
+
+
+  search?.addEventListener(
+    "input",
+    renderDueCustomers
+  );
+
+
+  const saveButton =
+    document.getElementById(
+      "saveCollectionBtn"
+    );
+
+
+  saveButton?.addEventListener(
+    "click",
+    saveCustomerCollection
+  );
+}
+
+
+// ============================================================
+// CUSTOMER LIST
+// ============================================================
+
+function renderDueCustomers() {
+
+  const container =
+    document.getElementById(
+      "dueCustomerList"
+    );
+
+
+  if (!container) return;
+
+
+  const searchValue =
+    (
+      document.getElementById(
+        "dueCustomerSearch"
+      )?.value || ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+  const filtered =
+    dueCustomers.filter(customer => {
+
+      const name =
+        String(
+          customer.name || ""
+        ).toLowerCase();
+
+      const phone =
+        String(
+          customer.phone || ""
+        ).toLowerCase();
+
+      const due =
+        Number(
+          customer.current_due || 0
+        );
+
+
+      return (
+        name.includes(searchValue) ||
+        phone.includes(searchValue)
+      ) && due > 0;
+
+    });
+
+
+  if (!filtered.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো বাকি Customer পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Customer</th>
+            <th>Phone</th>
+            <th>Current Due</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+
+        <tbody>
+
+          ${filtered.map((customer, index) => `
+
+            <tr>
+
+              <td>
+                ${index + 1}
+              </td>
+
+              <td>
+                ${escapeHtml(customer.name)}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  customer.phone || ""
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  customer.current_due
+                )}
+              </td>
+
+              <td>
+
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm"
+                  data-due-customer="${customer.id}"
+                >
+                  View
+                </button>
+
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+
+
+  container
+    .querySelectorAll(
+      "[data-due-customer]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        () => {
+
+          const customerId =
+            Number(
+              button.dataset.dueCustomer
+            );
+
+          selectDueCustomer(
+            customerId
+          );
+
+        }
+      );
+
+    });
+}
+
+
+// ============================================================
+// SELECT CUSTOMER
+// ============================================================
+
+async function selectDueCustomer(
+  customerId
+) {
+
+  selectedDueCustomer =
+    dueCustomers.find(
+      customer =>
+        Number(customer.id) ===
+        Number(customerId)
+    );
+
+
+  if (!selectedDueCustomer) {
+    return;
+  }
+
+
+  const details =
+    document.getElementById(
+      "customerDueDetails"
+    );
+
+
+  if (details) {
+    details.style.display =
+      "block";
+  }
+
+
+  document.getElementById(
+    "selectedCustomerName"
+  ).textContent =
+    selectedDueCustomer.name;
+
+
+  document.getElementById(
+    "customerCurrentDue"
+  ).textContent =
+    `৳${formatMoney(
+      selectedDueCustomer.current_due
+    )}`;
+
+
+  await loadCustomerLedger(
+    customerId
+  );
+}
+
+
+// ============================================================
+// CUSTOMER LEDGER
+// ============================================================
+
+async function loadCustomerLedger(
+  customerId
+) {
+
+  const container =
+    document.getElementById(
+      "customerLedger"
+    );
+
+
+  if (!container) return;
+
+
+  container.innerHTML = `
+    <div class="empty-state">
+      Ledger loading...
+    </div>
+  `;
+
+
+  try {
+
+    const response =
+      await fetch(
+        `/api/customers/${customerId}/ledger`
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+      throw new Error(
+        result.error ||
+        "Ledger load failed"
+      );
+    }
+
+
+    renderCustomerLedger(
+      result
+    );
+
+
+  } catch (error) {
+
+    console.error(
+      "Customer ledger error:",
+      error
+    );
+
+
+    container.innerHTML = `
+      <div class="alert error">
+        ${escapeHtml(
+          error.message
+        )}
+      </div>
+    `;
+
+  }
+}
+
+
+// ============================================================
+// RENDER LEDGER
+// ============================================================
+
+function renderCustomerLedger(
+  result
+) {
+
+  const container =
+    document.getElementById(
+      "customerLedger"
+    );
+
+
+  if (!container) return;
+
+
+  const entries =
+    result.entries || [];
+
+
+  const totalDue =
+    Number(
+      result.total_due || 0
+    );
+
+
+  const totalCollection =
+    Number(
+      result.total_collection || 0
+    );
+
+
+  document.getElementById(
+    "customerTotalDue"
+  ).textContent =
+    `৳${formatMoney(totalDue)}`;
+
+
+  document.getElementById(
+    "customerCollectionTotal"
+  ).textContent =
+    `৳${formatMoney(
+      totalCollection
+    )}`;
+
+
+  document.getElementById(
+    "customerCurrentDue"
+  ).textContent =
+    `৳${formatMoney(
+      result.current_due || 0
+    )}`;
+
+
+  if (!entries.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো ledger পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Reference</th>
+            <th>Debit</th>
+            <th>Credit</th>
+            <th>Balance</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${entries.map(entry => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  entry.date || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  entry.type || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  entry.reference || ""
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.debit || 0
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.credit || 0
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.balance || 0
+                )}
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+
+
+// ============================================================
+// SAVE CUSTOMER COLLECTION
+// ============================================================
+
+async function saveCustomerCollection() {
+
+  if (!selectedDueCustomer) {
+
+    showCollectionMessage(
+      "প্রথমে Customer নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const amount =
+    Number(
+      document.getElementById(
+        "collectionAmount"
+      ).value || 0
+    );
+
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "collectionAccount"
+      ).value || 0
+    );
+
+
+  const date =
+    document.getElementById(
+      "collectionDate"
+    ).value;
+
+
+  const note =
+    document.getElementById(
+      "collectionNote"
+    ).value.trim();
+
+
+  const currentDue =
+    Number(
+      selectedDueCustomer.current_due || 0
+    );
+
+
+  if (amount <= 0) {
+
+    showCollectionMessage(
+      "Collection Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (amount > currentDue) {
+
+    showCollectionMessage(
+      "Collection Amount বর্তমান বাকার চেয়ে বেশি হতে পারবে না।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showCollectionMessage(
+      "Payment Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveCollectionBtn"
+    );
+
+
+  const payload = {
+
+    customer_id:
+      Number(
+        selectedDueCustomer.id
+      ),
+
+    amount,
+
+    payment_account_id:
+      accountId,
+
+    collection_date:
+      date,
+
+    note
+
+  };
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/customer-collection",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body:
+            JSON.stringify(payload)
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Collection save failed"
+      );
+
+    }
+
+
+    showCollectionMessage(
+      "বাকি আদায় সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "collectionAmount"
+    ).value = "";
+
+
+    document.getElementById(
+      "collectionNote"
+    ).value = "";
+
+
+    await loadDueData();
+
+
+    selectedDueCustomer =
+      dueCustomers.find(
+        customer =>
+          Number(customer.id) ===
+          Number(
+            selectedDueCustomer.id
+          )
+      );
+
+
+    await selectDueCustomer(
+      selectedDueCustomer.id
+    );
+
+
+    renderDueCustomers();
+
+
+  } catch (error) {
+
+    console.error(
+      "Collection error:",
+      error
+    );
+
+
+    showCollectionMessage(
+      error.message ||
+      "Collection সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "বাকি আদায় সংরক্ষণ";
+
+  }
+}
+
+
+// ============================================================
+// COLLECTION MESSAGE
+// ============================================================
+
+function showCollectionMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "collectionMessage"
+    );
+
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
 
 /* =========================================================
    CUSTOMERS
