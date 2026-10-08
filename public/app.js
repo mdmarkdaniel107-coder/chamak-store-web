@@ -1,8 +1,185 @@
-const app=document.querySelector('#app');const money=n=>new Intl.NumberFormat('bn-BD',{maximumFractionDigits:2}).format(Number(n||0));
-async function api(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return r.json()}
-async function dashboard(){const d=await api('/api/dashboard');app.innerHTML=`<h2>ড্যাশবোর্ড</h2><div class="grid">${[['পণ্য',d.products.n],['স্টক ভ্যালু',money(d.stockValue.n)],['কাস্টমার',d.customers.n],['কাস্টমার বাকি',money(d.customerDue.n)],['সরবরাহকারী',d.suppliers.n],['সরবরাহকারী বাকি',money(d.supplierDue.n)],['আজকের বিক্রি',money(d.todaySales.n)]].map(x=>`<div class="card"><div>${x[0]}</div><div class="value">${x[1]}</div></div>`).join('')}</div>`}
-async function list(title,url,cols){const rows=await api(url);app.innerHTML=`<h2>${title}</h2><table><thead><tr>${cols.map(c=>`<th>${c[1]}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${r[c[0]]??''}</td>`).join('')}</tr>`).join('')}</tbody></table>`}
-async function products(){app.innerHTML='<h2>পণ্য</h2><form id="f"><input name="name" placeholder="পণ্যের নাম" required><input name="category" placeholder="Category"><input name="unit" placeholder="একক"><input name="current_purchase_price" type="number" placeholder="ক্রয়মূল্য"><input name="current_sale_price" type="number" placeholder="বিক্রয়মূল্য"><input name="minimum_stock" type="number" placeholder="Minimum Stock"><button>পণ্য যোগ করুন</button></form><div id="list"></div>';f.onsubmit=async e=>{e.preventDefault();const x=Object.fromEntries(new FormData(f));await api('/api/products',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(x)});products()};document.querySelector('#list').innerHTML=await tableHtml('/api/products',[['product_id','ID'],['name','নাম'],['current_quantity','স্টক'],['current_sale_price','বিক্রয়মূল্য'],['status','Status']])}
-async function tableHtml(url,cols){const rows=await api(url);return `<table><tr>${cols.map(c=>`<th>${c[1]}</th>`).join('')}</tr>${rows.map(r=>`<tr>${cols.map(c=>`<td>${r[c[0]]??''}</td>`).join('')}</tr>`).join('')}</table>`}
-function page(p){if(p==='dashboard')dashboard();else if(p==='products')products();else if(p==='sales')list('বিক্রি','/api/sales',[['sale_id','ID'],['date','তারিখ'],['product_name','পণ্য'],['quantity','Qty'],['total_sale','মোট'],['customer_name','কাস্টমার']]);else if(p==='purchases')list('ক্রয়','/api/purchases',[['purchase_id','ID'],['date','তারিখ'],['product_name','পণ্য'],['quantity','Qty'],['total_cost','মোট'],['supplier_name','সরবরাহকারী']]);else if(p==='customers')list('কাস্টমার','/api/customers',[['customer_id','ID'],['name','নাম'],['mobile','মোবাইল'],['current_due','বর্তমান বাকি']]);else if(p==='suppliers')list('সরবরাহকারী','/api/suppliers',[['supplier_id','ID'],['name','নাম'],['mobile','মোবাইল'],['current_due','বর্তমান বাকি']]);else if(p==='expenses')list('খরচ','/api/expenses',[['expense_id','ID'],['date','তারিখ'],['category','Category'],['amount','Amount']]);else if(p==='cash')list('নগদ লেনদেন','/api/cash',[['cash_transaction_id','ID'],['date','তারিখ'],['transaction_type','Type'],['cash_in','Cash In'],['cash_out','Cash Out']])}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>page(b.dataset.page));page('dashboard');
+const app = document.getElementById("app");
+
+
+// ============================================================
+// API CLIENT
+// ============================================================
+
+async function api(path, options = {}) {
+
+  const response = await fetch(`/api${path}`, {
+
+    ...options,
+
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+
+  });
+
+
+  const data =
+    await response.json()
+      .catch(() => ({}));
+
+
+  if (!response.ok) {
+
+    throw new Error(
+      data.message ||
+      `API Error: ${response.status}`
+    );
+
+  }
+
+
+  return data;
+}
+
+
+// ============================================================
+// MONEY
+// ============================================================
+
+function money(paisa) {
+
+  return (
+    Number(paisa || 0) / 100
+  ).toLocaleString(
+    "bn-BD",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }
+  );
+}
+
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+
+async function loadDashboard() {
+
+  app.innerHTML = `
+    <div class="loading">
+      ড্যাশবোর্ড লোড হচ্ছে...
+    </div>
+  `;
+
+
+  try {
+
+    const response =
+      await api("/dashboard");
+
+
+    const d =
+      response.data;
+
+
+    app.innerHTML = `
+
+      <h2>ড্যাশবোর্ড</h2>
+
+      <div class="dashboard-grid">
+
+        ${card(
+          "নগদ",
+          money(d.cash)
+        )}
+
+        ${card(
+          "bKash",
+          money(d.bkash)
+        )}
+
+        ${card(
+          "Nagad",
+          money(d.nagad)
+        )}
+
+        ${card(
+          "স্টক ভেলু",
+          money(d.stockValue)
+        )}
+
+        ${card(
+          "কাস্টমার বাকি",
+          money(d.customerDue)
+        )}
+
+        ${card(
+          "সরবরাহকারী বাকি",
+          money(d.supplierDue)
+        )}
+
+      </div>
+
+    `;
+
+  } catch (error) {
+
+    app.innerHTML = `
+
+      <div class="error-box">
+
+        ড্যাশবোর্ড লোড করা যায়নি।
+
+        <br>
+
+        ${escapeHtml(error.message)}
+
+      </div>
+
+    `;
+  }
+}
+
+
+// ============================================================
+// CARD
+// ============================================================
+
+function card(title, value) {
+
+  return `
+
+    <div class="dashboard-card">
+
+      <div class="card-title">
+        ${title}
+      </div>
+
+      <div class="card-value">
+        ৳ ${value}
+      </div>
+
+    </div>
+
+  `;
+}
+
+
+// ============================================================
+// HTML ESCAPE
+// ============================================================
+
+function escapeHtml(value) {
+
+  return String(value)
+
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+
+// ============================================================
+// APP START
+// ============================================================
+
+loadDashboard();
