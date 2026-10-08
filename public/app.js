@@ -3,211 +3,298 @@
    Frontend Application
    ========================================================= */
 
+"use strict";
+
+/* =========================================================
+   DOM REFERENCES
+   ========================================================= */
+
+const pageContent = document.getElementById("page-content");
+const pageTitle = document.getElementById("page-title");
+const pageSubtitle = document.getElementById("page-subtitle");
+const navItems = document.querySelectorAll("[data-page]");
+const app = pageContent;
+
+/* =========================================================
+   API HELPER
+   ========================================================= */
+
+async function apiFetch(url, options = {}) {
+  const config = {
+    ...options,
+    headers: {
+      ...(options.body && !(options.body instanceof FormData)
+        ? { "Content-Type": "application/json" }
+        : {}),
+      ...(options.headers || {})
+    }
+  };
+
+  return fetch(url, config);
+}
+
+/* =========================================================
+   GLOBAL STATE
+   ========================================================= */
+
 const state = {
   currentPage: "dashboard",
-
-  dashboard: null,
-
   products: [],
   customers: [],
   suppliers: [],
   accounts: [],
-
+  settings: {},
+  saleItems: [],
+  purchaseItems: [],
   loading: false
 };
 
-
 /* =========================================================
-   DOM
+   COMMON HELPERS
    ========================================================= */
 
-const $ = (selector) => document.querySelector(selector);
-
-const pageContent = $("#pageContent");
-const pageTitle = $("#pageTitle");
-const pageSubtitle = $("#pageSubtitle");
-const pageActions = $("#pageActions");
-
-const sidebar = $("#sidebar");
-const toast = $("#toast");
-const loadingOverlay = $("#loadingOverlay");
-const loadingText = $("#loadingText");
-
-
-/* =========================================================
-   UTILITIES
-   ========================================================= */
-
-function escapeHtml(value) {
-
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function $(selector) {
+  return document.querySelector(selector);
 }
 
+function $$(selector) {
+  return Array.from(document.querySelectorAll(selector));
+}
 
-function money(value) {
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
 
-  const number = Number(value || 0);
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
-  return number.toLocaleString("bn-BD", {
+function formatMoney(value) {
+  const amount = Number(value || 0);
+
+  return amount.toLocaleString("en-BD", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
 }
 
+function formatNumber(value) {
+  const number = Number(value || 0);
 
-function number(value) {
-
-  return Number(value || 0).toLocaleString("bn-BD", {
+  return number.toLocaleString("en-BD", {
     maximumFractionDigits: 3
   });
 }
 
-
-function showLoading(message = "লোড হচ্ছে...") {
-
-  loadingText.textContent = message;
-
-  loadingOverlay.classList.remove("hidden");
-
-  state.loading = true;
+function money(value) {
+  return formatMoney(value);
 }
 
-
-function hideLoading() {
-
-  loadingOverlay.classList.add("hidden");
-
-  state.loading = false;
+function number(value) {
+  return formatNumber(value);
 }
 
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
 
-let toastTimer = null;
+function nowDateTime() {
+  const d = new Date();
 
+  const pad = n => String(n).padStart(2, "0");
+
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
 function showToast(message, type = "success") {
+  const existing = document.querySelector(".toast");
 
-  clearTimeout(toastTimer);
+  if (existing) {
+    existing.remove();
+  }
 
+  const toast = document.createElement("div");
+
+  toast.className = `toast toast-${type}`;
   toast.textContent = message;
 
-  toast.className = `toast show ${type}`;
+  document.body.appendChild(toast);
 
-  toastTimer = setTimeout(() => {
+  setTimeout(() => {
+    toast.classList.add("show");
+  }, 10);
 
-    toast.className = "toast";
+  setTimeout(() => {
+    toast.classList.remove("show");
 
-  }, 3000);
+    setTimeout(() => {
+      toast.remove();
+    }, 250);
+  }, 2500);
 }
 
+function showError(message) {
+  showToast(message, "error");
+}
 
-/* =========================================================
-   API
-   ========================================================= */
+function showSuccess(message) {
+  showToast(message, "success");
+}
 
-async function api(url, options = {}) {
+function confirmAction(message) {
+  return window.confirm(message);
+}
 
-  const config = {
-    ...options,
+function parseJsonResponse(response) {
+  return response
+    .json()
+    .catch(() => ({}));
+}
 
-    headers: {
-      "Content-Type": "application/json",
+async function getJson(url, options = {}) {
+  const response = await apiFetch(url, options);
 
-      ...(options.headers || {})
-    }
-  };
-
-
-  const response = await fetch(url, config);
-
-
-  let data = null;
-
-  try {
-
-    data = await response.json();
-
-  } catch {
-
-    data = null;
-
-  }
-
+  const data = await parseJsonResponse(response);
 
   if (!response.ok) {
-
-    const message =
+    throw new Error(
       data?.error ||
       data?.message ||
-      `Request failed: ${response.status}`;
-
-    throw new Error(message);
-
+      `Request failed (${response.status})`
+    );
   }
 
-
   return data;
-
 }
 
+async function postJson(url, body) {
+  return getJson(url, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
+async function putJson(url, body) {
+  return getJson(url, {
+    method: "PUT",
+    body: JSON.stringify(body)
+  });
+}
+
+async function deleteJson(url) {
+  return getJson(url, {
+    method: "DELETE"
+  });
+}
+
+function setLoading(loading) {
+  state.loading = loading;
+
+  document.body.classList.toggle("is-loading", loading);
+}
+
+function transactionTypeLabel(type) {
+  const map = {
+    PURCHASE: "ক্রয়",
+    SALE: "বিক্রয়",
+    CUSTOMER_COLLECTION: "কাস্টমার বাকি আদায়",
+    SUPPLIER_PAYMENT: "সাপ্লায়ার পেমেন্ট",
+    EXPENSE: "খরচ",
+    OTHER_INCOME: "অন্যান্য আয়",
+    STOCK_ADJUSTMENT: "স্টক সমন্বয়",
+    ACCOUNT_TRANSFER: "অ্যাকাউন্ট ট্রান্সফার"
+  };
+
+  return map[type] || type || "";
+}
+
+function accountTypeLabel(type) {
+  const map = {
+    ASSET: "সম্পদ",
+    LIABILITY: "দায়",
+    EQUITY: "মূলধন",
+    INCOME: "আয়",
+    EXPENSE: "খরচ"
+  };
+
+  return map[type] || type || "";
+}
+
+function stockStatus(stock, lowStockLevel) {
+  const qty = Number(stock || 0);
+  const low = Number(lowStockLevel || 0);
+
+  if (qty <= 0) {
+    return {
+      text: "স্টক শেষ",
+      className: "danger"
+    };
+  }
+
+  if (qty <= low) {
+    return {
+      text: "কম স্টক",
+      className: "warning"
+    };
+  }
+
+  return {
+    text: "ঠিক আছে",
+    className: "success"
+  };
+}
 
 /* =========================================================
-   NAVIGATION
+   PAGE META
    ========================================================= */
 
 const pageMeta = {
-
   dashboard: {
     title: "ড্যাশবোর্ড",
-    subtitle: "ব্যবসার বর্তমান অবস্থা"
+    subtitle: "দোকানের সার্বিক হিসাব"
   },
 
   products: {
     title: "পণ্য",
-    subtitle: "পণ্য, স্টক ও মূল্য ব্যবস্থাপনা"
+    subtitle: "পণ্যের তালিকা ও স্টক"
   },
 
   purchase: {
     title: "ক্রয়",
-    subtitle: "সাপ্লায়ারের কাছ থেকে পণ্য ক্রয়"
+    subtitle: "পণ্য ক্রয় ও সাপ্লায়ার হিসাব"
   },
 
   sale: {
-    title: "বিক্রি",
-    subtitle: "পণ্যভিত্তিক ও মোট বিক্রয়"
+    title: "বিক্রয়",
+    subtitle: "পণ্য বিক্রয় ও কাস্টমার হিসাব"
   },
 
   customers: {
     title: "কাস্টমার",
-    subtitle: "কাস্টমার ও পাওনা ব্যবস্থাপনা"
+    subtitle: "কাস্টমার তালিকা"
   },
 
   suppliers: {
     title: "সাপ্লায়ার",
-    subtitle: "সাপ্লায়ার ও দেনা ব্যবস্থাপনা"
+    subtitle: "সাপ্লায়ার তালিকা"
   },
 
   stockVerification: {
     title: "স্টক ভেলু যাচাই",
-    subtitle: "System Stock বনাম Physical Stock"
+    subtitle: "সিস্টেম স্টক বনাম বাস্তব স্টক"
   },
 
   customerDue: {
     title: "কাস্টমার বাকি",
-    subtitle: "পাওনা ও কালেকশন"
+    subtitle: "বাকি ও আদায়ের হিসাব"
   },
 
   supplierDue: {
     title: "সাপ্লায়ার বাকি",
-    subtitle: "দেনা ও পেমেন্ট"
+    subtitle: "সাপ্লায়ার পাওনা ও পেমেন্ট"
   },
 
   expenses: {
@@ -216,48 +303,47 @@ const pageMeta = {
   },
 
   accounts: {
-    title: "হিসাব",
-    subtitle: "Cash, bKash, Nagad ও অন্যান্য হিসাব"
+    title: "অ্যাকাউন্ট",
+    subtitle: "ক্যাশ ও অন্যান্য হিসাব"
   },
 
   settings: {
     title: "সেটিংস",
-    subtitle: "সিস্টেম কনফিগারেশন"
+    subtitle: "সিস্টেম সেটিংস"
   }
-
 };
 
+/* =========================================================
+   NAVIGATION
+   ========================================================= */
 
-async function navigate(page) {
-
-  state.currentPage = page;
-
-
-  document
-    .querySelectorAll(".nav-item")
-    .forEach(item => {
-
-      item.classList.toggle(
-        "active",
-        item.dataset.page === page
-      );
-
-    });
-
-
+function updatePageMeta(page) {
   const meta = pageMeta[page] || pageMeta.dashboard;
 
-  pageTitle.textContent = meta.title;
-  pageSubtitle.textContent = meta.subtitle;
+  if (pageTitle) {
+    pageTitle.textContent = meta.title;
+  }
 
-  pageActions.innerHTML = "";
+  if (pageSubtitle) {
+    pageSubtitle.textContent = meta.subtitle;
+  }
 
+  navItems.forEach(item => {
+    const itemPage = item.dataset.page;
 
-  sidebar.classList.remove("open");
+    item.classList.toggle(
+      "active",
+      itemPage === page
+    );
+  });
+}
 
+async function navigate(page) {
+  state.currentPage = page;
+
+  updatePageMeta(page);
 
   switch (page) {
-
     case "dashboard":
       await renderDashboard();
       break;
@@ -271,8 +357,8 @@ async function navigate(page) {
       break;
 
     case "sale":
-     await renderSale();
-     break;
+      await renderSale();
+      break;
 
     case "customers":
       await renderCustomers();
@@ -282,758 +368,1594 @@ async function navigate(page) {
       await renderSuppliers();
       break;
 
-    case "stockVerification":
-      await renderStockVerification();
+    case "customer-due":
+      await renderCustomerDue();
       break;
 
-    case "customer-due":
-     await renderCustomerDue();
-     break;
-        
     case "supplier-due":
-     await renderSupplierDue();
-     break;
+      await renderSupplierDue();
+      break;
 
     case "expense":
-     await renderExpense();
-     break;
-        
+      await renderExpense();
+      break;
+
     case "income":
-     await renderOtherIncome();
-     break;
+      await renderOtherIncome();
+      break;
 
     case "transfer":
-     await renderAccountTransfer();
-     break; 
-        
+      await renderAccountTransfer();
+      break;
+
     case "stock-verification":
-     await renderStockVerification();
-     break;    
+      await renderStockVerification();
+      break;
 
     case "accounts":
       await renderAccounts();
       break;
 
     case "settings":
-      renderSettings();
+      await renderSettings();
       break;
 
     case "audit-log":
-     await renderAuditLog();
-     break;
+      await renderAuditLog();
+      break;
 
     case "backup":
-     await renderBackup();
-     break;    
+      await renderBackup();
+      break;
 
     default:
       await renderDashboard();
-
+      break;
   }
-
 }
 
+navItems.forEach(item => {
+  item.addEventListener("click", event => {
+    event.preventDefault();
+
+    const page = item.dataset.page;
+
+    if (page) {
+      navigate(page);
+    }
+  });
+});
+
+/* =========================================================
+   MODAL
+   ========================================================= */
+
+function openModal(title, content, options = {}) {
+  const existing = document.getElementById("app-modal");
+
+  if (existing) {
+    existing.remove();
+  }
+
+  const modal = document.createElement("div");
+
+  modal.id = "app-modal";
+  modal.className = "modal-overlay";
+
+  modal.innerHTML = `
+    <div class="modal ${options.large ? "modal-large" : ""}">
+      <div class="modal-header">
+        <h3>${escapeHtml(title)}</h3>
+
+        <button
+          type="button"
+          class="modal-close"
+          aria-label="Close"
+        >
+          ×
+        </button>
+      </div>
+
+      <div class="modal-body">
+        ${content}
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const closeButton = modal.querySelector(".modal-close");
+
+  closeButton?.addEventListener("click", () => {
+    closeModal();
+  });
+
+  modal.addEventListener("click", event => {
+    if (event.target === modal) {
+      closeModal();
+    }
+  });
+
+  return modal;
+}
+
+function closeModal() {
+  const modal = document.getElementById("app-modal");
+
+  if (modal) {
+    modal.remove();
+  }
+}
+
+/* =========================================================
+   LOADING / EMPTY / ERROR UI
+   ========================================================= */
+
+function loadingHtml(message = "লোড হচ্ছে...") {
+  return `
+    <div class="loading-state">
+      <div class="spinner"></div>
+      <div>${escapeHtml(message)}</div>
+    </div>
+  `;
+}
+
+function emptyHtml(message = "কোনো তথ্য পাওয়া যায়নি।") {
+  return `
+    <div class="empty-state">
+      <div class="empty-icon">📭</div>
+      <div>${escapeHtml(message)}</div>
+    </div>
+  `;
+}
+
+function errorHtml(message = "তথ্য লোড করতে সমস্যা হয়েছে।") {
+  return `
+    <div class="error-state">
+      <div class="error-icon">⚠️</div>
+      <div>${escapeHtml(message)}</div>
+    </div>
+  `;
+}
 
 /* =========================================================
    DASHBOARD
    ========================================================= */
 
-// ============================================================
-// STEP 12 — DASHBOARD UI
-// ============================================================
-
 async function renderDashboard() {
+  if (!app) return;
 
   app.innerHTML = `
-    <section class="page-header">
+    <section class="page dashboard-page">
 
-      <div>
-        <h2>Dashboard</h2>
-        <p>দোকানের বর্তমান হিসাবের সারসংক্ষেপ</p>
+      <div class="page-toolbar">
+        <div>
+          <h2>ড্যাশবোর্ড</h2>
+          <p class="muted">
+            আজ ও নির্বাচিত সময়ের ব্যবসার সারাংশ
+          </p>
+        </div>
+
+        <div class="toolbar-actions">
+          <label>
+            <span>শুরু</span>
+            <input
+              type="date"
+              id="dashboard-from"
+              value="${today()}"
+            >
+          </label>
+
+          <label>
+            <span>শেষ</span>
+            <input
+              type="date"
+              id="dashboard-to"
+              value="${today()}"
+            >
+          </label>
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="dashboard-refresh"
+          >
+            রিফ্রেশ
+          </button>
+        </div>
       </div>
 
-      <div class="date-filter">
-
-        <input
-          type="date"
-          id="dashboardFrom"
-          value="${todayDate()}"
-        >
-
-        <input
-          type="date"
-          id="dashboardTo"
-          value="${todayDate()}"
-        >
-
-        <button
-          class="btn btn-primary"
-          id="dashboardLoadBtn"
-        >
-          হিসাব দেখুন
-        </button>
-
+      <div id="dashboard-content">
+        ${loadingHtml("ড্যাশবোর্ড লোড হচ্ছে...")}
       </div>
 
     </section>
+  `;
 
+  const refreshButton = document.getElementById(
+    "dashboard-refresh"
+  );
 
-    <!-- MAIN FINANCIAL CARDS -->
+  refreshButton?.addEventListener("click", loadDashboard);
 
+  await loadDashboard();
+}
+
+async function loadDashboard() {
+  const container = document.getElementById(
+    "dashboard-content"
+  );
+
+  if (!container) return;
+
+  const from = document.getElementById(
+    "dashboard-from"
+  )?.value || today();
+
+  const to = document.getElementById(
+    "dashboard-to"
+  )?.value || today();
+
+  container.innerHTML = loadingHtml(
+    "ড্যাশবোর্ড লোড হচ্ছে..."
+  );
+
+  try {
+    const response = await apiFetch(
+      `/api/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data?.error ||
+        data?.message ||
+        "ড্যাশবোর্ড লোড করা যায়নি"
+      );
+    }
+
+    container.innerHTML = buildDashboardHtml(data);
+  } catch (error) {
+    console.error(error);
+
+    container.innerHTML = errorHtml(
+      error.message ||
+      "ড্যাশবোর্ড লোড করতে সমস্যা হয়েছে।"
+    );
+  }
+}
+
+function buildDashboardHtml(data) {
+  const summary = data.summary || {};
+
+  const sales = Number(
+    summary.sales ||
+    summary.totalSales ||
+    0
+  );
+
+  const purchases = Number(
+    summary.purchases ||
+    summary.totalPurchases ||
+    0
+  );
+
+  const grossProfit = Number(
+    summary.grossProfit ||
+    0
+  );
+
+  const netProfit = Number(
+    summary.netProfit ||
+    0
+  );
+
+  const customerDue = Number(
+    summary.customerDue ||
+    summary.customerReceivable ||
+    0
+  );
+
+  const supplierDue = Number(
+    summary.supplierDue ||
+    summary.supplierPayable ||
+    0
+  );
+
+  const stockValue = Number(
+    summary.stockValue ||
+    0
+  );
+
+  const productCount = Number(
+    summary.productCount ||
+    0
+  );
+
+  return `
     <div class="dashboard-grid">
 
-      <div class="dashboard-card">
-        <span>মোট বিক্রি</span>
-        <strong id="dashSales">৳0</strong>
+      <div class="stat-card">
+        <div class="stat-label">মোট বিক্রয়</div>
+        <div class="stat-value">
+          ৳ ${formatMoney(sales)}
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <span>মোট ক্রয়</span>
-        <strong id="dashPurchase">৳0</strong>
+      <div class="stat-card">
+        <div class="stat-label">মোট ক্রয়</div>
+        <div class="stat-value">
+          ৳ ${formatMoney(purchases)}
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <span>গ্রস লাভ</span>
-        <strong id="dashGrossProfit">৳0</strong>
+      <div class="stat-card">
+        <div class="stat-label">গ্রস প্রফিট</div>
+        <div class="stat-value">
+          ৳ ${formatMoney(grossProfit)}
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <span>নিট লাভ</span>
-        <strong id="dashNetProfit">৳0</strong>
+      <div class="stat-card">
+        <div class="stat-label">নেট প্রফিট</div>
+        <div class="stat-value">
+          ৳ ${formatMoney(netProfit)}
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <span>কাস্টমার বাকি</span>
-        <strong id="dashCustomerDue">৳0</strong>
+      <div class="stat-card">
+        <div class="stat-label">কাস্টমার বাকি</div>
+        <div class="stat-value">
+          ৳ ${formatMoney(customerDue)}
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <span>সাপ্লায়ার বাকি</span>
-        <strong id="dashSupplierDue">৳0</strong>
+      <div class="stat-card">
+        <div class="stat-label">সাপ্লায়ার বাকি</div>
+        <div class="stat-value">
+          ৳ ${formatMoney(supplierDue)}
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <span>বর্তমান স্টক ভেলু</span>
-        <strong id="dashStockValue">৳0</strong>
+      <div class="stat-card">
+        <div class="stat-label">স্টক ভেলু</div>
+        <div class="stat-value">
+          ৳ ${formatMoney(stockValue)}
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <span>পণ্য সংখ্যা</span>
-        <strong id="dashProductCount">0</strong>
-      </div>
-
-    </div>
-
-
-    <!-- CASH ACCOUNTS -->
-
-    <div class="card">
-
-      <div class="section-title">
-        <h3>Cash / Digital Balance</h3>
-      </div>
-
-      <div
-        id="dashboardAccounts"
-        class="account-grid"
-      >
-        <div class="empty-state">
-          হিসাব লোড হচ্ছে...
+      <div class="stat-card">
+        <div class="stat-label">পণ্য সংখ্যা</div>
+        <div class="stat-value">
+          ${formatNumber(productCount)}
         </div>
       </div>
 
     </div>
 
+    <div class="dashboard-sections">
 
-    <!-- LOW STOCK -->
+      ${buildDashboardAccounts(data.accounts)}
 
-    <div class="card">
+      ${buildDashboardLowStock(data.lowStock)}
 
-      <div class="section-title">
-        <h3>Low Stock</h3>
+      ${buildDashboardTopProducts(data.topProducts)}
+
+      ${buildDashboardRecentTransactions(
+        data.recentTransactions
+      )}
+
+    </div>
+  `;
+}
+
+function buildDashboardAccounts(accounts) {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return `
+      <section class="dashboard-section">
+        <div class="section-header">
+          <h3>অ্যাকাউন্ট ব্যালেন্স</h3>
+        </div>
+
+        ${emptyHtml("কোনো অ্যাকাউন্ট পাওয়া যায়নি।")}
+      </section>
+    `;
+  }
+
+  return `
+    <section class="dashboard-section">
+
+      <div class="section-header">
+        <h3>অ্যাকাউন্ট ব্যালেন্স</h3>
       </div>
 
-      <div class="table-wrap">
+      <div class="account-balance-grid">
 
-        <table>
+        ${accounts.map(account => `
+          <div class="mini-card">
+
+            <div class="mini-card-title">
+              ${escapeHtml(account.name)}
+            </div>
+
+            <div class="mini-card-value">
+              ৳ ${formatMoney(account.current_balance)}
+            </div>
+
+          </div>
+        `).join("")}
+
+      </div>
+
+    </section>
+  `;
+}
+
+function buildDashboardLowStock(products) {
+  if (!Array.isArray(products) || products.length === 0) {
+    return `
+      <section class="dashboard-section">
+
+        <div class="section-header">
+          <h3>কম স্টক</h3>
+        </div>
+
+        <div class="success-box">
+          বর্তমানে কোনো কম-স্টক পণ্য নেই।
+        </div>
+
+      </section>
+    `;
+  }
+
+  return `
+    <section class="dashboard-section">
+
+      <div class="section-header">
+        <h3>কম স্টক</h3>
+      </div>
+
+      <div class="table-wrapper">
+
+        <table class="data-table">
 
           <thead>
             <tr>
               <th>পণ্য</th>
               <th>বর্তমান স্টক</th>
-              <th>Low Stock Level</th>
+              <th>সীমা</th>
+              <th>অবস্থা</th>
             </tr>
           </thead>
 
-          <tbody id="dashboardLowStock">
+          <tbody>
+
+            ${products.map(product => {
+              const status = stockStatus(
+                product.current_stock,
+                product.low_stock_level
+              );
+
+              return `
+                <tr>
+
+                  <td>
+                    ${escapeHtml(product.name)}
+                  </td>
+
+                  <td>
+                    ${formatNumber(product.current_stock)}
+                    ${escapeHtml(product.unit || "")}
+                  </td>
+
+                  <td>
+                    ${formatNumber(product.low_stock_level)}
+                  </td>
+
+                  <td>
+                    <span class="badge ${status.className}">
+                      ${status.text}
+                    </span>
+                  </td>
+
+                </tr>
+              `;
+            }).join("")}
+
           </tbody>
 
         </table>
 
       </div>
 
-    </div>
+    </section>
+  `;
+}
 
+function buildDashboardTopProducts(products) {
+  if (!Array.isArray(products) || products.length === 0) {
+    return `
+      <section class="dashboard-section">
 
-    <!-- TOP PRODUCTS -->
+        <div class="section-header">
+          <h3>শীর্ষ বিক্রিত পণ্য</h3>
+        </div>
 
-    <div class="card">
+        ${emptyHtml("কোনো বিক্রয় তথ্য নেই।")}
 
-      <div class="section-title">
-        <h3>Top Selling Products</h3>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="dashboard-section">
+
+      <div class="section-header">
+        <h3>শীর্ষ বিক্রিত পণ্য</h3>
       </div>
 
-      <div class="table-wrap">
+      <div class="table-wrapper">
 
-        <table>
+        <table class="data-table">
 
           <thead>
             <tr>
               <th>পণ্য</th>
-              <th>বিক্রির Qty</th>
-              <th>বিক্রির মূল্য</th>
+              <th>পরিমাণ</th>
+              <th>বিক্রয়</th>
             </tr>
           </thead>
 
-          <tbody id="dashboardTopProducts">
+          <tbody>
+
+            ${products.map(product => `
+              <tr>
+
+                <td>
+                  ${escapeHtml(product.name)}
+                </td>
+
+                <td>
+                  ${formatNumber(product.quantity)}
+                </td>
+
+                <td>
+                  ৳ ${formatMoney(product.total_sales)}
+                </td>
+
+              </tr>
+            `).join("")}
+
           </tbody>
 
         </table>
 
       </div>
 
-    </div>
+    </section>
+  `;
+}
 
+function buildDashboardRecentTransactions(
+  transactions
+) {
+  if (
+    !Array.isArray(transactions) ||
+    transactions.length === 0
+  ) {
+    return `
+      <section class="dashboard-section">
 
-    <!-- RECENT TRANSACTIONS -->
+        <div class="section-header">
+          <h3>সাম্প্রতিক লেনদেন</h3>
+        </div>
 
-    <div class="card">
+        ${emptyHtml("কোনো লেনদেন পাওয়া যায়নি।")}
 
-      <div class="section-title">
+      </section>
+    `;
+  }
+
+  return `
+    <section class="dashboard-section">
+
+      <div class="section-header">
         <h3>সাম্প্রতিক লেনদেন</h3>
       </div>
 
-      <div class="table-wrap">
+      <div class="table-wrapper">
 
-        <table>
+        <table class="data-table">
 
           <thead>
             <tr>
               <th>তারিখ</th>
               <th>ধরন</th>
-              <th>Reference</th>
-              <th>Amount</th>
+              <th>রেফারেন্স</th>
+              <th>পরিমাণ</th>
             </tr>
           </thead>
 
-          <tbody id="dashboardRecentTransactions">
+          <tbody>
+
+            ${transactions.map(transaction => `
+              <tr>
+
+                <td>
+                  ${escapeHtml(
+                    transaction.transaction_date ||
+                    transaction.date ||
+                    ""
+                  )}
+                </td>
+
+                <td>
+                  ${escapeHtml(
+                    transactionTypeLabel(
+                      transaction.transaction_type ||
+                      transaction.type
+                    )
+                  )}
+                </td>
+
+                <td>
+                  ${escapeHtml(
+                    transaction.reference || ""
+                  )}
+                </td>
+
+                <td>
+                  ৳ ${formatMoney(
+                    transaction.total_amount ||
+                    transaction.amount ||
+                    0
+                  )}
+                </td>
+
+              </tr>
+            `).join("")}
+
           </tbody>
 
         </table>
 
       </div>
 
-    </div>
+    </section>
   `;
-
-
-  document
-    .getElementById("dashboardLoadBtn")
-    .addEventListener(
-      "click",
-      loadDashboard
-    );
-
-
-  await loadDashboard();
 }
 
+/* =========================================================
+   PRODUCTS
+   ========================================================= */
 
-async function loadDashboard() {
+async function renderProducts() {
+  if (!app) return;
 
-  const from =
+  app.innerHTML = `
+    <section class="page products-page">
+
+      <div class="page-toolbar">
+
+        <div>
+          <h2>পণ্য তালিকা</h2>
+
+          <p class="muted">
+            পণ্য, মূল্য ও বর্তমান স্টক
+          </p>
+        </div>
+
+        <div class="toolbar-actions">
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="add-product-btn"
+          >
+            + নতুন পণ্য
+          </button>
+
+        </div>
+
+      </div>
+
+      <div id="products-content">
+        ${loadingHtml("পণ্য লোড হচ্ছে...")}
+      </div>
+
+    </section>
+  `;
+
+  document
+    .getElementById("add-product-btn")
+    ?.addEventListener(
+      "click",
+      () => openProductModal()
+    );
+
+  await loadProducts();
+}
+
+async function loadProducts() {
+  const container = document.getElementById(
+    "products-content"
+  );
+
+  if (!container) return;
+
+  container.innerHTML = loadingHtml(
+    "পণ্য লোড হচ্ছে..."
+  );
+
+  try {
+    const data = await getJson(
+      "/api/products"
+    );
+
+    const products = Array.isArray(data)
+      ? data
+      : data.products || [];
+
+    state.products = products;
+
+    container.innerHTML =
+      buildProductsTable(products);
+
+  } catch (error) {
+    console.error(error);
+
+    container.innerHTML = errorHtml(
+      error.message ||
+      "পণ্য লোড করতে সমস্যা হয়েছে।"
+    );
+  }
+}
+
+function buildProductsTable(products) {
+  if (!products.length) {
+    return emptyHtml(
+      "এখনও কোনো পণ্য যোগ করা হয়নি।"
+    );
+  }
+
+  return `
+    <div class="table-wrapper">
+
+      <table class="data-table">
+
+        <thead>
+
+          <tr>
+            <th>SKU</th>
+            <th>পণ্যের নাম</th>
+            <th>ইউনিট</th>
+            <th>ক্রয়মূল্য</th>
+            <th>বিক্রয়মূল্য</th>
+            <th>স্টক</th>
+            <th>কম স্টক সীমা</th>
+            <th>অবস্থা</th>
+            <th>অ্যাকশন</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${products.map(product => {
+
+            const status = stockStatus(
+              product.current_stock,
+              product.low_stock_level
+            );
+
+            return `
+              <tr>
+
+                <td>
+                  ${escapeHtml(product.sku)}
+                </td>
+
+                <td>
+                  <strong>
+                    ${escapeHtml(product.name)}
+                  </strong>
+                </td>
+
+                <td>
+                  ${escapeHtml(product.unit || "")}
+                </td>
+
+                <td>
+                  ৳ ${formatMoney(
+                    product.purchase_price
+                  )}
+                </td>
+
+                <td>
+                  ৳ ${formatMoney(
+                    product.sale_price
+                  )}
+                </td>
+
+                <td>
+                  ${formatNumber(
+                    product.current_stock
+                  )}
+                </td>
+
+                <td>
+                  ${formatNumber(
+                    product.low_stock_level
+                  )}
+                </td>
+
+                <td>
+                  <span class="badge ${status.className}">
+                    ${status.text}
+                  </span>
+                </td>
+
+                <td>
+
+                  <div class="action-buttons">
+
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-secondary"
+                      data-edit-product="${product.id}"
+                    >
+                      এডিট
+                    </button>
+
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-danger"
+                      data-delete-product="${product.id}"
+                    >
+                      ডিলিট
+                    </button>
+
+                  </div>
+
+                </td>
+
+              </tr>
+            `;
+          }).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+
+document.addEventListener(
+  "click",
+  async event => {
+
+    const editButton =
+      event.target.closest(
+        "[data-edit-product]"
+      );
+
+    if (editButton) {
+      const id = Number(
+        editButton.dataset.editProduct
+      );
+
+      const product =
+        state.products.find(
+          item => Number(item.id) === id
+        );
+
+      if (product) {
+        openProductModal(product);
+      }
+
+      return;
+    }
+
+    const deleteButton =
+      event.target.closest(
+        "[data-delete-product]"
+      );
+
+    if (deleteButton) {
+
+      const id = Number(
+        deleteButton.dataset.deleteProduct
+      );
+
+      const product =
+        state.products.find(
+          item => Number(item.id) === id
+        );
+
+      if (!product) return;
+
+      if (
+        !confirmAction(
+          `আপনি কি "${product.name}" পণ্যটি ডিলিট করতে চান?`
+        )
+      ) {
+        return;
+      }
+
+      try {
+
+        await deleteJson(
+          `/api/products/${id}`
+        );
+
+        showSuccess(
+          "পণ্য ডিলিট হয়েছে।"
+        );
+
+        await loadProducts();
+
+      } catch (error) {
+
+        showError(
+          error.message ||
+          "পণ্য ডিলিট করা যায়নি।"
+        );
+
+      }
+    }
+  }
+);
+
+/* =========================================================
+   PRODUCT MODAL
+   ========================================================= */
+
+function openProductModal(product = null) {
+
+  const isEdit = Boolean(product);
+
+  const modal = openModal(
+    isEdit
+      ? "পণ্য সম্পাদনা"
+      : "নতুন পণ্য",
+
+    `
+      <form id="product-form">
+
+        <div class="form-grid">
+
+          <div class="form-group">
+
+            <label>
+              SKU
+            </label>
+
+            <input
+              type="text"
+              name="sku"
+              value="${escapeHtml(
+                product?.sku || ""
+              )}"
+              ${isEdit ? "" : "placeholder='অটো তৈরি হবে'"}
+            >
+
+            ${
+              !isEdit
+                ? `<small class="muted">
+                    খালি রাখলে সিস্টেম নিজে SKU তৈরি করবে।
+                   </small>`
+                : ""
+            }
+
+          </div>
+
+          <div class="form-group">
+
+            <label>
+              পণ্যের নাম *
+            </label>
+
+            <input
+              type="text"
+              name="name"
+              required
+              value="${escapeHtml(
+                product?.name || ""
+              )}"
+            >
+
+          </div>
+
+          <div class="form-group">
+
+            <label>
+              ইউনিট
+            </label>
+
+            <input
+              type="text"
+              name="unit"
+              value="${escapeHtml(
+                product?.unit || ""
+              )}"
+              placeholder="পিস / কেজি / লিটার"
+            >
+
+          </div>
+
+          <div class="form-group">
+
+            <label>
+              ক্রয়মূল্য
+            </label>
+
+            <input
+              type="number"
+              name="purchase_price"
+              min="0"
+              step="0.01"
+              value="${product?.purchase_price ?? 0}"
+            >
+
+          </div>
+
+          <div class="form-group">
+
+            <label>
+              বিক্রয়মূল্য
+            </label>
+
+            <input
+              type="number"
+              name="sale_price"
+              min="0"
+              step="0.01"
+              value="${product?.sale_price ?? 0}"
+            >
+
+          </div>
+
+          <div class="form-group">
+
+            <label>
+              কম স্টক সীমা
+            </label>
+
+            <input
+              type="number"
+              name="low_stock_level"
+              min="0"
+              step="0.001"
+              value="${product?.low_stock_level ?? 0}"
+            >
+
+          </div>
+
+        </div>
+
+        ${
+          isEdit
+            ? `
+              <div class="info-box">
+                বর্তমান স্টক:
+                <strong>
+                  ${formatNumber(
+                    product.current_stock
+                  )}
+                </strong>
+              </div>
+            `
+            : ""
+        }
+
+        <div class="modal-footer">
+
+          <button
+            type="button"
+            class="btn btn-secondary"
+            data-modal-cancel
+          >
+            বাতিল
+          </button>
+
+          <button
+            type="submit"
+            class="btn btn-primary"
+          >
+            ${isEdit ? "আপডেট" : "সংরক্ষণ"}
+          </button>
+
+        </div>
+
+      </form>
+    `
+  );
+
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
+
+  modal
+    .querySelector("#product-form")
+    ?.addEventListener(
+      "submit",
+      async event => {
+
+        event.preventDefault();
+
+        const form = event.currentTarget;
+
+        const formData =
+          new FormData(form);
+
+        const payload = {
+          sku:
+            String(
+              formData.get("sku") || ""
+            ).trim(),
+
+          name:
+            String(
+              formData.get("name") || ""
+            ).trim(),
+
+          unit:
+            String(
+              formData.get("unit") || ""
+            ).trim(),
+
+          purchase_price:
+            Number(
+              formData.get(
+                "purchase_price"
+              ) || 0
+            ),
+
+          sale_price:
+            Number(
+              formData.get(
+                "sale_price"
+              ) || 0
+            ),
+
+          low_stock_level:
+            Number(
+              formData.get(
+                "low_stock_level"
+              ) || 0
+            )
+        };
+
+        if (!payload.name) {
+          showError(
+            "পণ্যের নাম দিতে হবে।"
+          );
+
+          return;
+        }
+
+        try {
+
+          if (isEdit) {
+
+            await putJson(
+              `/api/products/${product.id}`,
+              payload
+            );
+
+            showSuccess(
+              "পণ্য আপডেট হয়েছে।"
+            );
+
+          } else {
+
+            await postJson(
+              "/api/products",
+              payload
+            );
+
+            showSuccess(
+              "নতুন পণ্য যোগ হয়েছে।"
+            );
+          }
+
+          closeModal();
+
+          await loadProducts();
+
+        } catch (error) {
+
+          showError(
+            error.message ||
+            "পণ্য সংরক্ষণ করা যায়নি।"
+          );
+        }
+      }
+    );
+}
+
+/* =========================================================
+   CUSTOMERS
+   ========================================================= */
+
+async function renderCustomers() {
+
+  if (!app) return;
+
+  app.innerHTML = `
+    <section class="page customers-page">
+
+      <div class="page-toolbar">
+
+        <div>
+
+          <h2>কাস্টমার</h2>
+
+          <p class="muted">
+            কাস্টমার তালিকা ও যোগাযোগ
+          </p>
+
+        </div>
+
+        <div class="toolbar-actions">
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="add-customer-btn"
+          >
+            + নতুন কাস্টমার
+          </button>
+
+        </div>
+
+      </div>
+
+      <div id="customers-content">
+        ${loadingHtml("কাস্টমার লোড হচ্ছে...")}
+      </div>
+
+    </section>
+  `;
+
+  document
+    .getElementById(
+      "add-customer-btn"
+    )
+    ?.addEventListener(
+      "click",
+      () => openCustomerModal()
+    );
+
+  await loadCustomers();
+}
+
+async function loadCustomers() {
+
+  const container =
     document.getElementById(
-      "dashboardFrom"
-    ).value;
+      "customers-content"
+    );
 
-  const to =
-    document.getElementById(
-      "dashboardTo"
-    ).value;
+  if (!container) return;
 
+  container.innerHTML =
+    loadingHtml(
+      "কাস্টমার লোড হচ্ছে..."
+    );
 
   try {
 
-    const response =
-      await apiFetch(
-        `/api/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-      );
-
-
     const data =
-      await response.json();
-
-
-    if (!response.ok) {
-
-      throw new Error(
-        data.error ||
-        "Dashboard load failed"
+      await getJson(
+        "/api/customers"
       );
 
-    }
+    const customers =
+      Array.isArray(data)
+        ? data
+        : data.customers || [];
 
+    state.customers =
+      customers;
 
-    // --------------------------------------------------------
-    // MAIN CARDS
-    // --------------------------------------------------------
-
-    document.getElementById(
-      "dashSales"
-    ).textContent =
-      formatMoney(data.sales.total);
-
-
-    document.getElementById(
-      "dashPurchase"
-    ).textContent =
-      formatMoney(
-        data.purchases.total
+    container.innerHTML =
+      buildCustomersTable(
+        customers
       );
-
-
-    document.getElementById(
-      "dashGrossProfit"
-    ).textContent =
-      formatMoney(
-        data.profit.gross
-      );
-
-
-    document.getElementById(
-      "dashNetProfit"
-    ).textContent =
-      formatMoney(
-        data.profit.net
-      );
-
-
-    document.getElementById(
-      "dashCustomerDue"
-    ).textContent =
-      formatMoney(
-        data.customerDue.total
-      );
-
-
-    document.getElementById(
-      "dashSupplierDue"
-    ).textContent =
-      formatMoney(
-        data.supplierDue.total
-      );
-
-
-    document.getElementById(
-      "dashStockValue"
-    ).textContent =
-      formatMoney(
-        data.stock.value
-      );
-
-
-    document.getElementById(
-      "dashProductCount"
-    ).textContent =
-      formatNumber(
-        data.stock.products
-      );
-
-
-    renderDashboardAccounts(
-      data.accounts
-    );
-
-
-    renderDashboardLowStock(
-      data.lowStock
-    );
-
-
-    renderDashboardTopProducts(
-      data.topProducts
-    );
-
-
-    renderDashboardRecentTransactions(
-      data.recentTransactions
-    );
-
 
   } catch (error) {
 
     console.error(error);
 
-    alert(
-      error.message ||
-      "Dashboard load failed"
-    );
-
+    container.innerHTML =
+      errorHtml(
+        error.message ||
+        "কাস্টমার লোড করতে সমস্যা হয়েছে।"
+      );
   }
 }
 
-
-function renderDashboardAccounts(
-  accounts
+function buildCustomersTable(
+  customers
 ) {
 
-  const container =
-    document.getElementById(
-      "dashboardAccounts"
+  if (!customers.length) {
+
+    return emptyHtml(
+      "এখনও কোনো কাস্টমার যোগ করা হয়নি।"
     );
-
-
-  if (!accounts?.length) {
-
-    container.innerHTML = `
-      <div class="empty-state">
-        কোনো account পাওয়া যায়নি।
-      </div>
-    `;
-
-    return;
   }
 
+  return `
+    <div class="table-wrapper">
 
-  container.innerHTML =
-    accounts
-      .map(account => `
-        <div class="account-card">
+      <table class="data-table">
 
-          <span>
-            ${escapeHtml(account.name)}
-          </span>
+        <thead>
 
-          <strong>
-            ${formatMoney(
-              account.current_balance
-            )}
-          </strong>
+          <tr>
+            <th>নাম</th>
+            <th>ফোন</th>
+            <th>ঠিকানা</th>
+            <th>বাকি</th>
+            <th>অ্যাকশন</th>
+          </tr>
 
-        </div>
-      `)
-      .join("");
+        </thead>
+
+        <tbody>
+
+          ${customers.map(customer => `
+
+            <tr>
+
+              <td>
+                <strong>
+                  ${escapeHtml(
+                    customer.name
+                  )}
+                </strong>
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  customer.phone || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  customer.address || ""
+                )}
+              </td>
+
+              <td>
+                ৳ ${formatMoney(
+                  customer.current_due || 0
+                )}
+              </td>
+
+              <td>
+
+                <div class="action-buttons">
+
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-secondary"
+                    data-edit-customer="${customer.id}"
+                  >
+                    এডিট
+                  </button>
+
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-danger"
+                    data-delete-customer="${customer.id}"
+                  >
+                    ডিলিট
+                  </button>
+
+                </div>
+
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
 }
 
+document.addEventListener(
+  "click",
+  async event => {
 
-function renderDashboardLowStock(
-  items
-) {
+    const editButton =
+      event.target.closest(
+        "[data-edit-customer]"
+      );
 
-  const tbody =
-    document.getElementById(
-      "dashboardLowStock"
-    );
+    if (editButton) {
 
+      const id =
+        Number(
+          editButton.dataset.editCustomer
+        );
 
-  if (!items?.length) {
+      const customer =
+        state.customers.find(
+          item =>
+            Number(item.id) === id
+        );
 
-    tbody.innerHTML = `
-      <tr>
-        <td
-          colspan="3"
-          class="empty-state"
-        >
-          কোনো Low Stock নেই।
-        </td>
-      </tr>
-    `;
+      if (customer) {
+        openCustomerModal(
+          customer
+        );
+      }
 
-    return;
+      return;
+    }
+
+    const deleteButton =
+      event.target.closest(
+        "[data-delete-customer]"
+      );
+
+    if (deleteButton) {
+
+      const id =
+        Number(
+          deleteButton.dataset.deleteCustomer
+        );
+
+      const customer =
+        state.customers.find(
+          item =>
+            Number(item.id) === id
+        );
+
+      if (!customer) return;
+
+      if (
+        !confirmAction(
+          `আপনি কি "${customer.name}" কাস্টমারটি ডিলিট করতে চান?`
+        )
+      ) {
+        return;
+      }
+
+      try {
+
+        await deleteJson(
+          `/api/customers/${id}`
+        );
+
+        showSuccess(
+          "কাস্টমার ডিলিট হয়েছে।"
+        );
+
+        await loadCustomers();
+
+      } catch (error) {
+
+        showError(
+          error.message ||
+          "কাস্টমার ডিলিট করা যায়নি।"
+        );
+      }
+    }
   }
-
-
-  tbody.innerHTML =
-    items
-      .map(item => `
-        <tr>
-
-          <td>
-            ${escapeHtml(item.name)}
-          </td>
-
-          <td>
-            ${formatNumber(
-              item.current_stock
-            )}
-          </td>
-
-          <td>
-            ${formatNumber(
-              item.low_stock_level
-            )}
-          </td>
-
-        </tr>
-      `)
-      .join("");
-}
-
-
-function renderDashboardTopProducts(
-  items
-) {
-
-  const tbody =
-    document.getElementById(
-      "dashboardTopProducts"
-    );
-
-
-  if (!items?.length) {
-
-    tbody.innerHTML = `
-      <tr>
-        <td
-          colspan="3"
-          class="empty-state"
-        >
-          কোনো বিক্রির তথ্য নেই।
-        </td>
-      </tr>
-    `;
-
-    return;
-  }
-
-
-  tbody.innerHTML =
-    items
-      .map(item => `
-        <tr>
-
-          <td>
-            ${escapeHtml(item.name)}
-          </td>
-
-          <td>
-            ${formatNumber(
-              item.quantity_sold
-            )}
-          </td>
-
-          <td>
-            ${formatMoney(
-              item.sales_value
-            )}
-          </td>
-
-        </tr>
-      `)
-      .join("");
-}
-
-
-function renderDashboardRecentTransactions(
-  items
-) {
-
-  const tbody =
-    document.getElementById(
-      "dashboardRecentTransactions"
-    );
-
-
-  if (!items?.length) {
-
-    tbody.innerHTML = `
-      <tr>
-        <td
-          colspan="4"
-          class="empty-state"
-        >
-          কোনো transaction নেই।
-        </td>
-      </tr>
-    `;
-
-    return;
-  }
-
-
-  tbody.innerHTML =
-    items
-      .map(item => `
-        <tr>
-
-          <td>
-            ${escapeHtml(
-              item.transaction_date || ""
-            )}
-          </td>
-
-          <td>
-            ${escapeHtml(
-              transactionTypeLabel(
-                item.transaction_type
-              )
-            )}
-          </td>
-
-          <td>
-            ${escapeHtml(
-              item.reference || "-"
-            )}
-          </td>
-
-          <td>
-            ${formatMoney(
-              item.total_amount || 0
-            )}
-          </td>
-
-        </tr>
-      `)
-      .join("");
-}
-
-
-function transactionTypeLabel(
-  type
-) {
-
-  const labels = {
-
-    PURCHASE:
-      "ক্রয়",
-
-    SALE:
-      "বিক্রি",
-
-    CUSTOMER_COLLECTION:
-      "কাস্টমার কালেকশন",
-
-    SUPPLIER_PAYMENT:
-      "সাপ্লায়ার পেমেন্ট",
-
-    EXPENSE:
-      "খরচ",
-
-    OTHER_INCOME:
-      "অন্যান্য আয়",
-
-    STOCK_ADJUSTMENT:
-      "স্টক Adjustment",
-
-    ACCOUNT_TRANSFER:
-      "Account Transfer"
-
-  };
-
-
-  return labels[type] || type || "-";
-}
+);
 
 /* =========================================================
-   PRODUCT FORM
+   CUSTOMER MODAL
    ========================================================= */
 
-function showProductForm() {
+function openCustomerModal(
+  customer = null
+) {
 
-  pageContent.innerHTML = `
+  const isEdit =
+    Boolean(customer);
 
-    <div class="card">
+  const modal =
+    openModal(
+      isEdit
+        ? "কাস্টমার সম্পাদনা"
+        : "নতুন কাস্টমার",
 
-      <div class="card-header">
-
-        <h3>
-          নতুন পণ্য
-        </h3>
-
-      </div>
-
-
-      <div class="card-body">
-
-        <form id="productForm">
+      `
+        <form id="customer-form">
 
           <div class="form-grid">
 
             <div class="form-group">
 
               <label>
-                পণ্যের নাম *
+                নাম *
               </label>
 
               <input
-                id="productName"
-                class="form-control"
+                type="text"
+                name="name"
                 required
-                maxlength="200"
+                value="${escapeHtml(
+                  customer?.name || ""
+                )}"
               >
 
             </div>
 
-
             <div class="form-group">
 
               <label>
-                Unit
+                ফোন
               </label>
 
               <input
-                id="productUnit"
-                class="form-control"
-                placeholder="kg / pcs / litre"
+                type="tel"
+                name="phone"
+                value="${escapeHtml(
+                  customer?.phone || ""
+                )}"
               >
 
             </div>
 
-
-            <div class="form-group">
-
-              <label>
-                বিক্রয় মূল্য
-              </label>
-
-              <input
-                id="productSalePrice"
-                class="form-control"
-                type="number"
-                min="0"
-                step="0.01"
-                value="0"
-              >
-
-            </div>
-
-
-            <div class="form-group">
+            <div class="form-group form-group-full">
 
               <label>
-                Low Stock Level
+                ঠিকানা
               </label>
 
-              <input
-                id="productLowStock"
-                class="form-control"
-                type="number"
-                min="0"
-                step="0.001"
-                value="0"
-              >
+              <textarea
+                name="address"
+                rows="3"
+              >${escapeHtml(
+                customer?.address || ""
+              )}</textarea>
 
             </div>
 
           </div>
 
+          ${
+            isEdit
+              ? `
+                <div class="info-box">
 
-          <div class="form-actions">
+                  বর্তমান বাকি:
+                  <strong>
+                    ৳ ${formatMoney(
+                      customer.current_due || 0
+                    )}
+                  </strong>
+
+                </div>
+              `
+              : ""
+          }
+
+          <div class="modal-footer">
 
             <button
               type="button"
-              id="cancelProductBtn"
-              class="btn btn-light"
+              class="btn btn-secondary"
+              data-modal-cancel
             >
               বাতিল
             </button>
@@ -1042,7 +1964,779 @@ function showProductForm() {
               type="submit"
               class="btn btn-primary"
             >
-              পণ্য সংরক্ষণ
+              ${isEdit
+                ? "আপডেট"
+                : "সংরক্ষণ"}
+            </button>
+
+          </div>
+
+        </form>
+      `
+    );
+
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
+
+  modal
+    .querySelector(
+      "#customer-form"
+    )
+    ?.addEventListener(
+      "submit",
+      async event => {
+
+        event.preventDefault();
+
+        const form =
+          event.currentTarget;
+
+        const formData =
+          new FormData(form);
+
+        const payload = {
+
+          name:
+            String(
+              formData.get("name") ||
+              ""
+            ).trim(),
+
+          phone:
+            String(
+              formData.get("phone") ||
+              ""
+            ).trim(),
+
+          address:
+            String(
+              formData.get("address") ||
+              ""
+            ).trim()
+        };
+
+        if (!payload.name) {
+
+          showError(
+            "কাস্টমারের নাম দিতে হবে।"
+          );
+
+          return;
+        }
+
+        try {
+
+          if (isEdit) {
+
+            await putJson(
+              `/api/customers/${customer.id}`,
+              payload
+            );
+
+            showSuccess(
+              "কাস্টমার আপডেট হয়েছে।"
+            );
+
+          } else {
+
+            await postJson(
+              "/api/customers",
+              payload
+            );
+
+            showSuccess(
+              "নতুন কাস্টমার যোগ হয়েছে।"
+            );
+          }
+
+          closeModal();
+
+          await loadCustomers();
+
+        } catch (error) {
+
+          showError(
+            error.message ||
+            "কাস্টমার সংরক্ষণ করা যায়নি।"
+          );
+        }
+      }
+    );
+}
+
+/* =========================================================
+   SUPPLIERS
+   ========================================================= */
+
+async function renderSuppliers() {
+
+  if (!app) return;
+
+  app.innerHTML = `
+    <section class="page suppliers-page">
+
+      <div class="page-toolbar">
+
+        <div>
+
+          <h2>সাপ্লায়ার</h2>
+
+          <p class="muted">
+            সাপ্লায়ার তালিকা ও পাওনা
+          </p>
+
+        </div>
+
+        <div class="toolbar-actions">
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="add-supplier-btn"
+          >
+            + নতুন সাপ্লায়ার
+          </button>
+
+        </div>
+
+      </div>
+
+      <div id="suppliers-content">
+        ${loadingHtml(
+          "সাপ্লায়ার লোড হচ্ছে..."
+        )}
+      </div>
+
+    </section>
+  `;
+
+  document
+    .getElementById(
+      "add-supplier-btn"
+    )
+    ?.addEventListener(
+      "click",
+      () => openSupplierModal()
+    );
+
+  await loadSuppliers();
+}
+
+async function loadSuppliers() {
+
+  const container =
+    document.getElementById(
+      "suppliers-content"
+    );
+
+  if (!container) return;
+
+  container.innerHTML =
+    loadingHtml(
+      "সাপ্লায়ার লোড হচ্ছে..."
+    );
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/suppliers"
+      );
+
+    const suppliers =
+      Array.isArray(data)
+        ? data
+        : data.suppliers || [];
+
+    state.suppliers =
+      suppliers;
+
+    container.innerHTML =
+      buildSuppliersTable(
+        suppliers
+      );
+
+  } catch (error) {
+
+    console.error(error);
+
+    container.innerHTML =
+      errorHtml(
+        error.message ||
+        "সাপ্লায়ার লোড করতে সমস্যা হয়েছে।"
+      );
+  }
+}
+
+function buildSuppliersTable(
+  suppliers
+) {
+
+  if (!suppliers.length) {
+
+    return emptyHtml(
+      "এখনও কোনো সাপ্লায়ার যোগ করা হয়নি।"
+    );
+  }
+
+  return `
+    <div class="table-wrapper">
+
+      <table class="data-table">
+
+        <thead>
+
+          <tr>
+            <th>নাম</th>
+            <th>ফোন</th>
+            <th>ঠিকানা</th>
+            <th>পাওনা</th>
+            <th>অ্যাকশন</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${suppliers.map(supplier => `
+
+            <tr>
+
+              <td>
+                <strong>
+                  ${escapeHtml(
+                    supplier.name
+                  )}
+                </strong>
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  supplier.phone || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  supplier.address || ""
+                )}
+              </td>
+
+              <td>
+                ৳ ${formatMoney(
+                  supplier.current_due || 0
+                )}
+              </td>
+
+              <td>
+
+                <div class="action-buttons">
+
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-secondary"
+                    data-edit-supplier="${supplier.id}"
+                  >
+                    এডিট
+                  </button>
+
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-danger"
+                    data-delete-supplier="${supplier.id}"
+                  >
+                    ডিলিট
+                  </button>
+
+                </div>
+
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+
+document.addEventListener(
+  "click",
+  async event => {
+
+    const editButton =
+      event.target.closest(
+        "[data-edit-supplier]"
+      );
+
+    if (editButton) {
+
+      const id =
+        Number(
+          editButton.dataset.editSupplier
+        );
+
+      const supplier =
+        state.suppliers.find(
+          item =>
+            Number(item.id) === id
+        );
+
+      if (supplier) {
+        openSupplierModal(
+          supplier
+        );
+      }
+
+      return;
+    }
+
+    const deleteButton =
+      event.target.closest(
+        "[data-delete-supplier]"
+      );
+
+    if (deleteButton) {
+
+      const id =
+        Number(
+          deleteButton.dataset.deleteSupplier
+        );
+
+      const supplier =
+        state.suppliers.find(
+          item =>
+            Number(item.id) === id
+        );
+
+      if (!supplier) return;
+
+      if (
+        !confirmAction(
+          `আপনি কি "${supplier.name}" সাপ্লায়ারটি ডিলিট করতে চান?`
+        )
+      ) {
+        return;
+      }
+
+      try {
+
+        await deleteJson(
+          `/api/suppliers/${id}`
+        );
+
+        showSuccess(
+          "সাপ্লায়ার ডিলিট হয়েছে।"
+        );
+
+        await loadSuppliers();
+
+      } catch (error) {
+
+        showError(
+          error.message ||
+          "সাপ্লায়ার ডিলিট করা যায়নি।"
+        );
+      }
+    }
+  }
+);
+
+/* =========================================================
+   SUPPLIER MODAL
+   ========================================================= */
+
+function openSupplierModal(
+  supplier = null
+) {
+
+  const isEdit =
+    Boolean(supplier);
+
+  const modal =
+    openModal(
+      isEdit
+        ? "সাপ্লায়ার সম্পাদনা"
+        : "নতুন সাপ্লায়ার",
+
+      `
+        <form id="supplier-form">
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                নাম *
+              </label>
+
+              <input
+                type="text"
+                name="name"
+                required
+                value="${escapeHtml(
+                  supplier?.name || ""
+                )}"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                ফোন
+              </label>
+
+              <input
+                type="tel"
+                name="phone"
+                value="${escapeHtml(
+                  supplier?.phone || ""
+                )}"
+              >
+
+            </div>
+
+            <div class="form-group form-group-full">
+
+              <label>
+                ঠিকানা
+              </label>
+
+              <textarea
+                name="address"
+                rows="3"
+              >${escapeHtml(
+                supplier?.address || ""
+              )}</textarea>
+
+            </div>
+
+          </div>
+
+          ${
+            isEdit
+              ? `
+                <div class="info-box">
+
+                  বর্তমান পাওনা:
+                  <strong>
+                    ৳ ${formatMoney(
+                      supplier.current_due || 0
+                    )}
+                  </strong>
+
+                </div>
+              `
+              : ""
+          }
+
+          <div class="modal-footer">
+
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-modal-cancel
+            >
+              বাতিল
+            </button>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              ${isEdit
+                ? "আপডেট"
+                : "সংরক্ষণ"}
+            </button>
+
+          </div>
+
+        </form>
+      `
+    );
+
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
+
+  modal
+    .querySelector(
+      "#supplier-form"
+    )
+    ?.addEventListener(
+      "submit",
+      async event => {
+
+        event.preventDefault();
+
+        const form =
+          event.currentTarget;
+
+        const formData =
+          new FormData(form);
+
+        const payload = {
+
+          name:
+            String(
+              formData.get("name") ||
+              ""
+            ).trim(),
+
+          phone:
+            String(
+              formData.get("phone") ||
+              ""
+            ).trim(),
+
+          address:
+            String(
+              formData.get("address") ||
+              ""
+            ).trim()
+        };
+
+        if (!payload.name) {
+
+          showError(
+            "সাপ্লায়ারের নাম দিতে হবে।"
+          );
+
+          return;
+        }
+
+        try {
+
+          if (isEdit) {
+
+            await putJson(
+              `/api/suppliers/${supplier.id}`,
+              payload
+            );
+
+            showSuccess(
+              "সাপ্লায়ার আপডেট হয়েছে।"
+            );
+
+          } else {
+
+            await postJson(
+              "/api/suppliers",
+              payload
+            );
+
+            showSuccess(
+              "নতুন সাপ্লায়ার যোগ হয়েছে।"
+            );
+          }
+
+          closeModal();
+
+          await loadSuppliers();
+
+        } catch (error) {
+
+          showError(
+            error.message ||
+            "সাপ্লায়ার সংরক্ষণ করা যায়নি।"
+          );
+        }
+      }
+    );
+}
+
+/* =========================================================
+   PURCHASE
+   ========================================================= */
+
+async function renderPurchase() {
+
+  if (!app) return;
+
+  state.purchaseItems = [];
+
+  app.innerHTML = `
+    <section class="page purchase-page">
+
+      <div class="page-toolbar">
+
+        <div>
+
+          <h2>পণ্য ক্রয়</h2>
+
+          <p class="muted">
+            এক ইনভয়েসে একাধিক পণ্য ক্রয় করা যাবে
+          </p>
+
+        </div>
+
+      </div>
+
+      <div class="card">
+
+        <form id="purchase-form">
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                ক্রয়ের তারিখ *
+              </label>
+
+              <input
+                type="date"
+                id="purchase-date"
+                name="purchase_date"
+                required
+                value="${today()}"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                সাপ্লায়ার
+              </label>
+
+              <select
+                id="purchase-supplier"
+                name="supplier_id"
+              >
+
+                <option value="">
+                  — সাপ্লায়ার নির্বাচন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পেমেন্ট অ্যাকাউন্ট *
+              </label>
+
+              <select
+                id="purchase-account"
+                name="account_id"
+                required
+              >
+
+                <option value="">
+                  — অ্যাকাউন্ট নির্বাচন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                রেফারেন্স
+              </label>
+
+              <input
+                type="text"
+                name="reference"
+                placeholder="ইনভয়েস / নোট"
+              >
+
+            </div>
+
+          </div>
+
+          <div class="section-header">
+
+            <h3>
+              ক্রয় পণ্য
+            </h3>
+
+            <button
+              type="button"
+              class="btn btn-secondary"
+              id="add-purchase-item"
+            >
+              + পণ্য যোগ
+            </button>
+
+          </div>
+
+          <div id="purchase-items">
+            ${emptyHtml(
+              "প্রথমে পণ্য যোগ করুন।"
+            )}
+          </div>
+
+          <div class="purchase-summary">
+
+            <div>
+              মোট ক্রয়:
+              <strong id="purchase-total">
+                ৳ 0.00
+              </strong>
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পরিশোধ
+              </label>
+
+              <input
+                type="number"
+                id="purchase-paid"
+                name="paid_amount"
+                min="0"
+                step="0.01"
+                value="0"
+              >
+
+            </div>
+
+            <div>
+              বাকি:
+              <strong id="purchase-due">
+                ৳ 0.00
+              </strong>
+            </div>
+
+          </div>
+
+          <div class="form-actions">
+
+            <button
+              type="reset"
+              class="btn btn-secondary"
+              id="purchase-reset"
+            >
+              রিসেট
+            </button>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              ক্রয় সংরক্ষণ
             </button>
 
           </div>
@@ -1051,166 +2745,2759 @@ function showProductForm() {
 
       </div>
 
-    </div>
-
+    </section>
   `;
 
+  await loadPurchaseDependencies();
 
-  $("#cancelProductBtn")
-    .addEventListener(
+  document
+    .getElementById(
+      "add-purchase-item"
+    )
+    ?.addEventListener(
       "click",
-      () => navigate("products")
+      addPurchaseItem
     );
 
+  document
+    .getElementById(
+      "purchase-paid"
+    )
+    ?.addEventListener(
+      "input",
+      updatePurchaseSummary
+    );
 
-  $("#productForm")
-    .addEventListener(
+  document
+    .getElementById(
+      "purchase-form"
+    )
+    ?.addEventListener(
       "submit",
-      submitProduct
+      submitPurchase
     );
 
-}
-
-
-async function submitProduct(event) {
-
-  event.preventDefault();
-
-
-  const payload = {
-
-    name:
-      $("#productName")
-        .value
-        .trim(),
-
-    unit:
-      $("#productUnit")
-        .value
-        .trim(),
-
-    sale_price:
-      Number(
-        $("#productSalePrice")
-          .value || 0
-      ),
-
-    low_stock_level:
-      Number(
-        $("#productLowStock")
-          .value || 0
-      )
-
-  };
-
-
-  if (!payload.name) {
-
-    showToast(
-      "পণ্যের নাম দিন",
-      "error"
-    );
-
-    return;
-
-  }
-
-
-  try {
-
-    showLoading("পণ্য সংরক্ষণ হচ্ছে...");
-
-
-    await api(
-      "/api/products",
-      {
-        method: "POST",
-
-        body: JSON.stringify(payload)
+  document
+    .getElementById(
+      "purchase-reset"
+    )
+    ?.addEventListener(
+      "click",
+      () => {
+        state.purchaseItems = [];
+        renderPurchaseItems();
+        updatePurchaseSummary();
       }
     );
 
+  renderPurchaseItems();
+  updatePurchaseSummary();
+}
 
-    showToast(
-      "পণ্য সফলভাবে সংরক্ষণ হয়েছে"
-    );
+async function loadPurchaseDependencies() {
 
+  try {
 
-    await navigate("products");
+    const [
+      productsData,
+      suppliersData,
+      accountsData
+    ] = await Promise.all([
+      getJson("/api/products"),
+      getJson("/api/suppliers"),
+      getJson("/api/accounts")
+    ]);
 
+    state.products =
+      Array.isArray(productsData)
+        ? productsData
+        : productsData.products || [];
+
+    state.suppliers =
+      Array.isArray(suppliersData)
+        ? suppliersData
+        : suppliersData.suppliers || [];
+
+    state.accounts =
+      Array.isArray(accountsData)
+        ? accountsData
+        : accountsData.accounts || [];
+
+    const supplierSelect =
+      document.getElementById(
+        "purchase-supplier"
+      );
+
+    if (supplierSelect) {
+
+      supplierSelect.innerHTML = `
+        <option value="">
+          — সাপ্লায়ার নির্বাচন —
+        </option>
+
+        ${state.suppliers.map(
+          supplier => `
+            <option value="${supplier.id}">
+              ${escapeHtml(
+                supplier.name
+              )}
+            </option>
+          `
+        ).join("")}
+      `;
+    }
+
+    const accountSelect =
+      document.getElementById(
+        "purchase-account"
+      );
+
+    if (accountSelect) {
+
+      accountSelect.innerHTML = `
+        <option value="">
+          — অ্যাকাউন্ট নির্বাচন —
+        </option>
+
+        ${state.accounts
+          .filter(
+            account =>
+              [
+                "ASSET",
+                "CASH",
+                "BANK",
+                "MOBILE_BANKING"
+              ].includes(
+                account.account_type
+              ) ||
+              [
+                1000,
+                1010,
+                1020,
+                1030,
+                1040,
+                1050,
+                1060,
+                1070
+              ].includes(
+                Number(account.id)
+              )
+          )
+          .map(
+            account => `
+              <option value="${account.id}">
+                ${escapeHtml(
+                  account.name
+                )}
+              </option>
+            `
+          ).join("")}
+      `;
+    }
 
   } catch (error) {
 
-    showToast(
-      error.message,
-      "error"
+    console.error(error);
+
+    showError(
+      error.message ||
+      "ক্রয়ের প্রয়োজনীয় তথ্য লোড করা যায়নি।"
+    );
+  }
+}
+
+function addPurchaseItem() {
+
+  const item = {
+    product_id: "",
+    quantity: 1,
+    unit_price: 0,
+    total: 0
+  };
+
+  state.purchaseItems.push(item);
+
+  renderPurchaseItems();
+
+  updatePurchaseSummary();
+}
+
+function renderPurchaseItems() {
+
+  const container =
+    document.getElementById(
+      "purchase-items"
+    );
+
+  if (!container) return;
+
+  if (!state.purchaseItems.length) {
+
+    container.innerHTML =
+      emptyHtml(
+        "প্রথমে পণ্য যোগ করুন।"
+      );
+
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="table-wrapper">
+
+      <table class="data-table purchase-items-table">
+
+        <thead>
+
+          <tr>
+            <th>পণ্য</th>
+            <th>পরিমাণ</th>
+            <th>ক্রয়মূল্য</th>
+            <th>মোট</th>
+            <th></th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${state.purchaseItems.map(
+            (item, index) => {
+
+              const product =
+                state.products.find(
+                  p =>
+                    Number(p.id) ===
+                    Number(
+                      item.product_id
+                    )
+                );
+
+              return `
+                <tr>
+
+                  <td>
+
+                    <select
+                      data-purchase-product="${index}"
+                    >
+
+                      <option value="">
+                        — পণ্য —
+                      </option>
+
+                      ${state.products.map(
+                        p => `
+                          <option
+                            value="${p.id}"
+                            ${
+                              Number(
+                                item.product_id
+                              ) ===
+                              Number(p.id)
+                                ? "selected"
+                                : ""
+                            }
+                          >
+                            ${escapeHtml(
+                              p.name
+                            )}
+                          </option>
+                        `
+                      ).join("")}
+
+                    </select>
+
+                  </td>
+
+                  <td>
+
+                    <input
+                      type="number"
+                      min="0.001"
+                      step="0.001"
+                      value="${item.quantity}"
+                      data-purchase-quantity="${index}"
+                    >
+
+                  </td>
+
+                  <td>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value="${item.unit_price}"
+                      data-purchase-price="${index}"
+                    >
+
+                  </td>
+
+                  <td>
+                    ৳ ${formatMoney(
+                      Number(item.total || 0)
+                    )}
+                  </td>
+
+                  <td>
+
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-danger"
+                      data-remove-purchase="${index}"
+                    >
+                      ×
+                    </button>
+
+                  </td>
+
+                </tr>
+              `;
+            }
+          ).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+
+  container
+    .querySelectorAll(
+      "[data-purchase-product]"
+    )
+    .forEach(select => {
+
+      select.addEventListener(
+        "change",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .purchaseProduct
+            );
+
+          const productId =
+            Number(
+              event.target.value || 0
+            );
+
+          const product =
+            state.products.find(
+              p =>
+                Number(p.id) ===
+                productId
+            );
+
+          state.purchaseItems[index]
+            .product_id =
+            productId || "";
+
+          if (
+            product &&
+            !state.purchaseItems[index]
+              .unit_price
+          ) {
+            state.purchaseItems[index]
+              .unit_price =
+              Number(
+                product.purchase_price ||
+                product.last_purchase_cost ||
+                0
+              );
+          }
+
+          recalculatePurchaseItem(
+            index
+          );
+
+          renderPurchaseItems();
+
+          updatePurchaseSummary();
+        }
+      );
+    });
+
+  container
+    .querySelectorAll(
+      "[data-purchase-quantity]"
+    )
+    .forEach(input => {
+
+      input.addEventListener(
+        "input",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .purchaseQuantity
+            );
+
+          state.purchaseItems[index]
+            .quantity =
+            Number(
+              event.target.value || 0
+            );
+
+          recalculatePurchaseItem(
+            index
+          );
+
+          renderPurchaseItems();
+
+          updatePurchaseSummary();
+        }
+      );
+    });
+
+  container
+    .querySelectorAll(
+      "[data-purchase-price]"
+    )
+    .forEach(input => {
+
+      input.addEventListener(
+        "input",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .purchasePrice
+            );
+
+          state.purchaseItems[index]
+            .unit_price =
+            Number(
+              event.target.value || 0
+            );
+
+          recalculatePurchaseItem(
+            index
+          );
+
+          renderPurchaseItems();
+
+          updatePurchaseSummary();
+        }
+      );
+    });
+
+  container
+    .querySelectorAll(
+      "[data-remove-purchase]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .removePurchase
+            );
+
+          state.purchaseItems.splice(
+            index,
+            1
+          );
+
+          renderPurchaseItems();
+
+          updatePurchaseSummary();
+        }
+      );
+    });
+}
+
+function recalculatePurchaseItem(
+  index
+) {
+
+  const item =
+    state.purchaseItems[index];
+
+  if (!item) return;
+
+  item.quantity =
+    Number(item.quantity || 0);
+
+  item.unit_price =
+    Number(item.unit_price || 0);
+
+  item.total =
+    item.quantity *
+    item.unit_price;
+}
+
+function getPurchaseTotal() {
+
+  return state.purchaseItems.reduce(
+    (sum, item) =>
+      sum +
+      Number(item.total || 0),
+    0
+  );
+}
+
+function updatePurchaseSummary() {
+
+  const total =
+    getPurchaseTotal();
+
+  const paid =
+    Number(
+      document.getElementById(
+        "purchase-paid"
+      )?.value || 0
+    );
+
+  const due =
+    Math.max(
+      total - paid,
+      0
+    );
+
+  const totalElement =
+    document.getElementById(
+      "purchase-total"
+    );
+
+  const dueElement =
+    document.getElementById(
+      "purchase-due"
+    );
+
+  if (totalElement) {
+    totalElement.textContent =
+      `৳ ${formatMoney(total)}`;
+  }
+
+  if (dueElement) {
+    dueElement.textContent =
+      `৳ ${formatMoney(due)}`;
+  }
+}
+
+async function submitPurchase(
+  event
+) {
+
+  event.preventDefault();
+
+  if (!state.purchaseItems.length) {
+
+    showError(
+      "কমপক্ষে একটি পণ্য যোগ করুন।"
+    );
+
+    return;
+  }
+
+  for (
+    const item of state.purchaseItems
+  ) {
+
+    if (!item.product_id) {
+
+      showError(
+        "সব পণ্যের নাম নির্বাচন করুন।"
+      );
+
+      return;
+    }
+
+    if (
+      Number(item.quantity) <= 0
+    ) {
+
+      showError(
+        "পণ্যের পরিমাণ ০-এর বেশি হতে হবে।"
+      );
+
+      return;
+    }
+
+    if (
+      Number(item.unit_price) < 0
+    ) {
+
+      showError(
+        "ক্রয়মূল্য সঠিক দিন।"
+      );
+
+      return;
+    }
+  }
+
+  const total =
+    getPurchaseTotal();
+
+  const paid =
+    Number(
+      document.getElementById(
+        "purchase-paid"
+      )?.value || 0
+    );
+
+  const due =
+    total - paid;
+
+  if (paid < 0) {
+
+    showError(
+      "পরিশোধের পরিমাণ সঠিক নয়।"
+    );
+
+    return;
+  }
+
+  if (paid > total) {
+
+    showError(
+      "পরিশোধ মোট ক্রয়ের চেয়ে বেশি হতে পারবে না।"
+    );
+
+    return;
+  }
+
+  const form =
+    document.getElementById(
+      "purchase-form"
+    );
+
+  const formData =
+    new FormData(form);
+
+  const payload = {
+
+    purchase_date:
+      formData.get(
+        "purchase_date"
+      ) || today(),
+
+    supplier_id:
+      formData.get(
+        "supplier_id"
+      )
+        ? Number(
+            formData.get(
+              "supplier_id"
+            )
+          )
+        : null,
+
+    account_id:
+      formData.get(
+        "account_id"
+      )
+        ? Number(
+            formData.get(
+              "account_id"
+            )
+          )
+        : null,
+
+    reference:
+      String(
+        formData.get(
+          "reference"
+        ) || ""
+      ).trim(),
+
+    total_amount:
+      total,
+
+    paid_amount:
+      paid,
+
+    due_amount:
+      due,
+
+    items:
+      state.purchaseItems.map(
+        item => ({
+          product_id:
+            Number(
+              item.product_id
+            ),
+
+          quantity:
+            Number(
+              item.quantity
+            ),
+
+          unit_price:
+            Number(
+              item.unit_price
+            ),
+
+          total:
+            Number(
+              item.total
+            )
+        })
+      )
+  };
+
+  if (!payload.account_id) {
+
+    showError(
+      "পেমেন্ট অ্যাকাউন্ট নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  try {
+
+    setLoading(true);
+
+    await postJson(
+      "/api/transactions/purchase",
+      payload
+    );
+
+    showSuccess(
+      "ক্রয় সফলভাবে সংরক্ষণ হয়েছে।"
+    );
+
+    state.purchaseItems = [];
+
+    form.reset();
+
+    document.getElementById(
+      "purchase-date"
+    ).value = today();
+
+    renderPurchaseItems();
+
+    updatePurchaseSummary();
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "ক্রয় সংরক্ষণ করা যায়নি।"
     );
 
   } finally {
 
-    hideLoading();
-
+    setLoading(false);
   }
-
 }
-/* =========================================================
-   PURCHASE MODULE
-   ========================================================= */
-
-let purchaseItems = [];
-
 
 /* =========================================================
-   PURCHASE INITIALIZATION
+   SALE
    ========================================================= */
 
-async function renderPurchase() {
+async function renderSale() {
 
-  try {
+  if (!app) return;
 
-    showLoading("ক্রয় মডিউল লোড হচ্ছে...");
+  state.saleItems = [];
 
-    const [
-      suppliers,
-      products,
-      accounts
-    ] = await Promise.all([
-      loadSuppliers(),
-      loadProducts(),
-      loadAccounts()
-    ]);
+  app.innerHTML = `
+    <section class="page sale-page">
 
+      <div class="page-toolbar">
 
-    purchaseItems = [];
+        <div>
 
+          <h2>বিক্রয়</h2>
 
-    pageActions.innerHTML = "";
+          <p class="muted">
+            পণ্যভিত্তিক বিক্রয় ও কাস্টমার বাকি
+          </p>
 
+        </div>
 
-    pageContent.innerHTML = `
+      </div>
 
       <div class="card">
 
-        <div class="card-header">
+        <form id="sale-form">
 
-          <div>
+          <div class="form-grid">
 
-            <h3>
-              নতুন ক্রয়
-            </h3>
+            <div class="form-group">
 
-            <div class="stat-sub">
-              একটি Invoice-এ একাধিক পণ্য যোগ করা যাবে
+              <label>
+                বিক্রয়ের তারিখ *
+              </label>
+
+              <input
+                type="date"
+                name="sale_date"
+                id="sale-date"
+                required
+                value="${today()}"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                কাস্টমার
+              </label>
+
+              <select
+                name="customer_id"
+                id="sale-customer"
+              >
+
+                <option value="">
+                  — কাস্টমার নির্বাচন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পেমেন্ট অ্যাকাউন্ট
+              </label>
+
+              <select
+                name="account_id"
+                id="sale-account"
+              >
+
+                <option value="">
+                  — অ্যাকাউন্ট —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                রেফারেন্স
+              </label>
+
+              <input
+                type="text"
+                name="reference"
+                placeholder="নোট / রেফারেন্স"
+              >
+
             </div>
 
           </div>
 
+          <div class="section-header">
+
+            <h3>
+              বিক্রয় পণ্য
+            </h3>
+
+            <button
+              type="button"
+              class="btn btn-secondary"
+              id="add-sale-item"
+            >
+              + পণ্য যোগ
+            </button>
+
+          </div>
+
+          <div id="sale-items">
+            ${emptyHtml(
+              "প্রথমে পণ্য যোগ করুন।"
+            )}
+          </div>
+
+          <div class="sale-summary">
+
+            <div>
+              মোট বিক্রয়:
+              <strong id="sale-total">
+                ৳ 0.00
+              </strong>
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পরিশোধ
+              </label>
+
+              <input
+                type="number"
+                id="sale-paid"
+                name="paid_amount"
+                min="0"
+                step="0.01"
+                value="0"
+              >
+
+            </div>
+
+            <div>
+              বাকি:
+              <strong id="sale-due">
+                ৳ 0.00
+              </strong>
+            </div>
+
+          </div>
+
+          <div class="form-actions">
+
+            <button
+              type="reset"
+              class="btn btn-secondary"
+              id="sale-reset"
+            >
+              রিসেট
+            </button>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              বিক্রয় সংরক্ষণ
+            </button>
+
+          </div>
+
+        </form>
+
+      </div>
+
+    </section>
+  `;
+
+  await loadSaleDependencies();
+
+  document
+    .getElementById(
+      "add-sale-item"
+    )
+    ?.addEventListener(
+      "click",
+      addSaleItem
+    );
+
+  document
+    .getElementById(
+      "sale-paid"
+    )
+    ?.addEventListener(
+      "input",
+      updateSaleSummary
+    );
+
+  document
+    .getElementById(
+      "sale-form"
+    )
+    ?.addEventListener(
+      "submit",
+      submitSale
+    );
+
+  document
+    .getElementById(
+      "sale-reset"
+    )
+    ?.addEventListener(
+      "click",
+      () => {
+
+        state.saleItems = [];
+
+        renderSaleItems();
+
+        updateSaleSummary();
+      }
+    );
+
+  renderSaleItems();
+
+  updateSaleSummary();
+}
+
+async function loadSaleDependencies() {
+
+  try {
+
+    const [
+      productsData,
+      customersData,
+      accountsData
+    ] = await Promise.all([
+      getJson("/api/products"),
+      getJson("/api/customers"),
+      getJson("/api/accounts")
+    ]);
+
+    state.products =
+      Array.isArray(productsData)
+        ? productsData
+        : productsData.products || [];
+
+    state.customers =
+      Array.isArray(customersData)
+        ? customersData
+        : customersData.customers || [];
+
+    state.accounts =
+      Array.isArray(accountsData)
+        ? accountsData
+        : accountsData.accounts || [];
+
+    const customerSelect =
+      document.getElementById(
+        "sale-customer"
+      );
+
+    if (customerSelect) {
+
+      customerSelect.innerHTML = `
+        <option value="">
+          — কাস্টমার নির্বাচন —
+        </option>
+
+        ${state.customers.map(
+          customer => `
+            <option value="${customer.id}">
+              ${escapeHtml(
+                customer.name
+              )}
+            </option>
+          `
+        ).join("")}
+      `;
+    }
+
+    const accountSelect =
+      document.getElementById(
+        "sale-account"
+      );
+
+    if (accountSelect) {
+
+      accountSelect.innerHTML = `
+        <option value="">
+          — অ্যাকাউন্ট —
+        </option>
+
+        ${state.accounts
+          .filter(
+            account =>
+              [
+                1000,
+                1010,
+                1020,
+                1030,
+                1040,
+                1050,
+                1060,
+                1070
+              ].includes(
+                Number(account.id)
+              )
+          )
+          .map(
+            account => `
+              <option value="${account.id}">
+                ${escapeHtml(
+                  account.name
+                )}
+              </option>
+            `
+          ).join("")}
+      `;
+    }
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "বিক্রয়ের প্রয়োজনীয় তথ্য লোড করা যায়নি।"
+    );
+  }
+}
+
+function addSaleItem() {
+
+  state.saleItems.push({
+    product_id: "",
+    quantity: 1,
+    unit_price: 0,
+    total: 0
+  });
+
+  renderSaleItems();
+
+  updateSaleSummary();
+}
+
+function renderSaleItems() {
+
+  const container =
+    document.getElementById(
+      "sale-items"
+    );
+
+  if (!container) return;
+
+  if (!state.saleItems.length) {
+
+    container.innerHTML =
+      emptyHtml(
+        "প্রথমে পণ্য যোগ করুন।"
+      );
+
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="table-wrapper">
+
+      <table class="data-table sale-items-table">
+
+        <thead>
+
+          <tr>
+            <th>পণ্য</th>
+            <th>স্টক</th>
+            <th>পরিমাণ</th>
+            <th>বিক্রয়মূল্য</th>
+            <th>মোট</th>
+            <th></th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${state.saleItems.map(
+            (item, index) => {
+
+              const product =
+                state.products.find(
+                  p =>
+                    Number(p.id) ===
+                    Number(
+                      item.product_id
+                    )
+                );
+
+              return `
+                <tr>
+
+                  <td>
+
+                    <select
+                      data-sale-product="${index}"
+                    >
+
+                      <option value="">
+                        — পণ্য —
+                      </option>
+
+                      ${state.products.map(
+                        p => `
+                          <option
+                            value="${p.id}"
+                            ${
+                              Number(
+                                item.product_id
+                              ) ===
+                              Number(p.id)
+                                ? "selected"
+                                : ""
+                            }
+                          >
+                            ${escapeHtml(
+                              p.name
+                            )}
+                          </option>
+                        `
+                      ).join("")}
+
+                    </select>
+
+                  </td>
+
+                  <td>
+                    ${
+                      product
+                        ? formatNumber(
+                            product.current_stock
+                          )
+                        : "—"
+                    }
+                  </td>
+
+                  <td>
+
+                    <input
+                      type="number"
+                      min="0.001"
+                      step="0.001"
+                      max="${
+                        product
+                          ? product.current_stock
+                          : ""
+                      }"
+                      value="${item.quantity}"
+                      data-sale-quantity="${index}"
+                    >
+
+                  </td>
+
+                  <td>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value="${item.unit_price}"
+                      data-sale-price="${index}"
+                    >
+
+                  </td>
+
+                  <td>
+                    ৳ ${formatMoney(
+                      item.total || 0
+                    )}
+                  </td>
+
+                  <td>
+
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-danger"
+                      data-remove-sale="${index}"
+                    >
+                      ×
+                    </button>
+
+                  </td>
+
+                </tr>
+              `;
+            }
+          ).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+
+  container
+    .querySelectorAll(
+      "[data-sale-product]"
+    )
+    .forEach(select => {
+
+      select.addEventListener(
+        "change",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .saleProduct
+            );
+
+          const productId =
+            Number(
+              event.target.value || 0
+            );
+
+          const product =
+            state.products.find(
+              p =>
+                Number(p.id) ===
+                productId
+            );
+
+          state.saleItems[index]
+            .product_id =
+            productId || "";
+
+          if (product) {
+
+            state.saleItems[index]
+              .unit_price =
+              Number(
+                product.sale_price || 0
+              );
+          }
+
+          recalculateSaleItem(
+            index
+          );
+
+          renderSaleItems();
+
+          updateSaleSummary();
+        }
+      );
+    });
+
+  container
+    .querySelectorAll(
+      "[data-sale-quantity]"
+    )
+    .forEach(input => {
+
+      input.addEventListener(
+        "input",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .saleQuantity
+            );
+
+          state.saleItems[index]
+            .quantity =
+            Number(
+              event.target.value || 0
+            );
+
+          recalculateSaleItem(
+            index
+          );
+
+          renderSaleItems();
+
+          updateSaleSummary();
+        }
+      );
+    });
+
+  container
+    .querySelectorAll(
+      "[data-sale-price]"
+    )
+    .forEach(input => {
+
+      input.addEventListener(
+        "input",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .salePrice
+            );
+
+          state.saleItems[index]
+            .unit_price =
+            Number(
+              event.target.value || 0
+            );
+
+          recalculateSaleItem(
+            index
+          );
+
+          renderSaleItems();
+
+          updateSaleSummary();
+        }
+      );
+    });
+
+  container
+    .querySelectorAll(
+      "[data-remove-sale]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        event => {
+
+          const index =
+            Number(
+              event.target.dataset
+                .removeSale
+            );
+
+          state.saleItems.splice(
+            index,
+            1
+          );
+
+          renderSaleItems();
+
+          updateSaleSummary();
+        }
+      );
+    });
+}
+
+function recalculateSaleItem(
+  index
+) {
+
+  const item =
+    state.saleItems[index];
+
+  if (!item) return;
+
+  item.quantity =
+    Number(item.quantity || 0);
+
+  item.unit_price =
+    Number(item.unit_price || 0);
+
+  item.total =
+    item.quantity *
+    item.unit_price;
+}
+
+function getSaleTotal() {
+
+  return state.saleItems.reduce(
+    (sum, item) =>
+      sum +
+      Number(item.total || 0),
+    0
+  );
+}
+
+function updateSaleSummary() {
+
+  const total =
+    getSaleTotal();
+
+  const paid =
+    Number(
+      document.getElementById(
+        "sale-paid"
+      )?.value || 0
+    );
+
+  const due =
+    Math.max(
+      total - paid,
+      0
+    );
+
+  const totalElement =
+    document.getElementById(
+      "sale-total"
+    );
+
+  const dueElement =
+    document.getElementById(
+      "sale-due"
+    );
+
+  if (totalElement) {
+
+    totalElement.textContent =
+      `৳ ${formatMoney(total)}`;
+  }
+
+  if (dueElement) {
+
+    dueElement.textContent =
+      `৳ ${formatMoney(due)}`;
+  }
+}
+
+async function submitSale(
+  event
+) {
+
+  event.preventDefault();
+
+  if (!state.saleItems.length) {
+
+    showError(
+      "কমপক্ষে একটি পণ্য যোগ করুন।"
+    );
+
+    return;
+  }
+
+  for (
+    const item of state.saleItems
+  ) {
+
+    if (!item.product_id) {
+
+      showError(
+        "সব পণ্যের নাম নির্বাচন করুন।"
+      );
+
+      return;
+    }
+
+    const product =
+      state.products.find(
+        p =>
+          Number(p.id) ===
+          Number(
+            item.product_id
+          )
+      );
+
+    if (!product) {
+
+      showError(
+        "নির্বাচিত পণ্য পাওয়া যায়নি।"
+      );
+
+      return;
+    }
+
+    if (
+      Number(item.quantity) <= 0
+    ) {
+
+      showError(
+        "বিক্রয়ের পরিমাণ ০-এর বেশি হতে হবে।"
+      );
+
+      return;
+    }
+
+    if (
+      Number(item.quantity) >
+      Number(product.current_stock)
+    ) {
+
+      showError(
+        `"${product.name}" পণ্যের পর্যাপ্ত স্টক নেই।`
+      );
+
+      return;
+    }
+
+    if (
+      Number(item.unit_price) < 0
+    ) {
+
+      showError(
+        "বিক্রয়মূল্য সঠিক দিন।"
+      );
+
+      return;
+    }
+  }
+
+  const total =
+    getSaleTotal();
+
+  const paid =
+    Number(
+      document.getElementById(
+        "sale-paid"
+      )?.value || 0
+    );
+
+  const due =
+    total - paid;
+
+  if (paid < 0) {
+
+    showError(
+      "পরিশোধের পরিমাণ সঠিক নয়।"
+    );
+
+    return;
+  }
+
+  if (paid > total) {
+
+    showError(
+      "পরিশোধ মোট বিক্রয়ের চেয়ে বেশি হতে পারবে না।"
+    );
+
+    return;
+  }
+
+  const form =
+    document.getElementById(
+      "sale-form"
+    );
+
+  const formData =
+    new FormData(form);
+
+  const customerId =
+    formData.get(
+      "customer_id"
+    )
+      ? Number(
+          formData.get(
+            "customer_id"
+          )
+        )
+      : null;
+
+  if (
+    due > 0 &&
+    !customerId
+  ) {
+
+    showError(
+      "বাকি বিক্রয়ের জন্য কাস্টমার নির্বাচন করতে হবে।"
+    );
+
+    return;
+  }
+
+  const payload = {
+
+    sale_date:
+      formData.get(
+        "sale_date"
+      ) || today(),
+
+    customer_id:
+      customerId,
+
+    account_id:
+      formData.get(
+        "account_id"
+      )
+        ? Number(
+            formData.get(
+              "account_id"
+            )
+          )
+        : null,
+
+    reference:
+      String(
+        formData.get(
+          "reference"
+        ) || ""
+      ).trim(),
+
+    total_amount:
+      total,
+
+    paid_amount:
+      paid,
+
+    due_amount:
+      due,
+
+    items:
+      state.saleItems.map(
+        item => ({
+          product_id:
+            Number(
+              item.product_id
+            ),
+
+          quantity:
+            Number(
+              item.quantity
+            ),
+
+          unit_price:
+            Number(
+              item.unit_price
+            ),
+
+          total:
+            Number(
+              item.total
+            )
+        })
+      )
+  };
+
+  try {
+
+    setLoading(true);
+
+    await postJson(
+      "/api/transactions/sale",
+      payload
+    );
+
+    showSuccess(
+      "বিক্রয় সফলভাবে সংরক্ষণ হয়েছে।"
+    );
+
+    state.saleItems = [];
+
+    form.reset();
+
+    document.getElementById(
+      "sale-date"
+    ).value = today();
+
+    renderSaleItems();
+
+    updateSaleSummary();
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "বিক্রয় সংরক্ষণ করা যায়নি।"
+    );
+
+  } finally {
+
+    setLoading(false);
+  }
+}
+
+/* =========================================================
+   CUSTOMER DUE
+   ========================================================= */
+
+async function renderCustomerDue() {
+
+  if (!app) return;
+
+  app.innerHTML = `
+    <section class="page customer-due-page">
+
+      <div class="page-toolbar">
+
+        <div>
+
+          <h2>কাস্টমার বাকি</h2>
+
+          <p class="muted">
+            বাকি বিক্রয়, আদায় ও কাস্টমার লেজার
+          </p>
+
         </div>
 
+        <div class="toolbar-actions">
 
-        <div class="card-body">
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="new-customer-collection"
+          >
+            + বাকি আদায়
+          </button>
 
-          <!-- ================= PURCHASE HEADER ================= -->
+        </div>
+
+      </div>
+
+      <div
+        id="customer-due-content"
+      >
+        ${loadingHtml(
+          "কাস্টমার বাকি লোড হচ্ছে..."
+        )}
+      </div>
+
+    </section>
+  `;
+
+  document
+    .getElementById(
+      "new-customer-collection"
+    )
+    ?.addEventListener(
+      "click",
+      () =>
+        openCustomerCollectionModal()
+    );
+
+  await loadCustomerDue();
+}
+
+async function loadCustomerDue() {
+
+  const container =
+    document.getElementById(
+      "customer-due-content"
+    );
+
+  if (!container) return;
+
+  container.innerHTML =
+    loadingHtml(
+      "কাস্টমার বাকি লোড হচ্ছে..."
+    );
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/customers"
+      );
+
+    const customers =
+      Array.isArray(data)
+        ? data
+        : data.customers || [];
+
+    state.customers =
+      customers;
+
+    container.innerHTML = `
+      <div class="table-wrapper">
+
+        <table class="data-table">
+
+          <thead>
+
+            <tr>
+              <th>কাস্টমার</th>
+              <th>ফোন</th>
+              <th>বর্তমান বাকি</th>
+              <th>অ্যাকশন</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            ${
+              customers.length
+                ? customers.map(
+                    customer => `
+                      <tr>
+
+                        <td>
+                          <strong>
+                            ${escapeHtml(
+                              customer.name
+                            )}
+                          </strong>
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            customer.phone ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            customer.current_due ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+
+                          <div class="action-buttons">
+
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-primary"
+                              data-collect-customer="${customer.id}"
+                            >
+                              আদায়
+                            </button>
+
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-secondary"
+                              data-customer-ledger="${customer.id}"
+                            >
+                              লেজার
+                            </button>
+
+                          </div>
+
+                        </td>
+
+                      </tr>
+                    `
+                  ).join("")
+                : `
+                    <tr>
+
+                      <td
+                        colspan="4"
+                        class="text-center"
+                      >
+                        কোনো কাস্টমার নেই।
+                      </td>
+
+                    </tr>
+                  `
+            }
+
+          </tbody>
+
+        </table>
+
+      </div>
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    container.innerHTML =
+      errorHtml(
+        error.message ||
+        "কাস্টমার বাকি লোড করা যায়নি।"
+      );
+  }
+}
+
+document.addEventListener(
+  "click",
+  event => {
+
+    const collectButton =
+      event.target.closest(
+        "[data-collect-customer]"
+      );
+
+    if (collectButton) {
+
+      const id =
+        Number(
+          collectButton.dataset
+            .collectCustomer
+        );
+
+      const customer =
+        state.customers.find(
+          item =>
+            Number(item.id) === id
+        );
+
+      if (customer) {
+        openCustomerCollectionModal(
+          customer
+        );
+      }
+
+      return;
+    }
+
+    const ledgerButton =
+      event.target.closest(
+        "[data-customer-ledger]"
+      );
+
+    if (ledgerButton) {
+
+      const id =
+        Number(
+          ledgerButton.dataset
+            .customerLedger
+        );
+
+      const customer =
+        state.customers.find(
+          item =>
+            Number(item.id) === id
+        );
+
+      if (customer) {
+        openCustomerLedger(
+          customer
+        );
+      }
+    }
+  }
+);
+
+function openCustomerCollectionModal(
+  customer = null
+) {
+
+  const modal =
+    openModal(
+      "কাস্টমার বাকি আদায়",
+
+      `
+        <form id="customer-collection-form">
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                কাস্টমার *
+              </label>
+
+              <select
+                name="customer_id"
+                required
+              >
+
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
+
+                ${state.customers.map(
+                  item => `
+                    <option
+                      value="${item.id}"
+                      ${
+                        customer &&
+                        Number(
+                          customer.id
+                        ) ===
+                        Number(item.id)
+                          ? "selected"
+                          : ""
+                      }
+                    >
+                      ${escapeHtml(
+                        item.name
+                      )}
+                    </option>
+                  `
+                ).join("")}
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                তারিখ *
+              </label>
+
+              <input
+                type="date"
+                name="collection_date"
+                required
+                value="${today()}"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                আদায়ের অ্যাকাউন্ট *
+              </label>
+
+              <select
+                name="account_id"
+                required
+                id="collection-account"
+              >
+
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পরিমাণ *
+              </label>
+
+              <input
+                type="number"
+                name="amount"
+                required
+                min="0.01"
+                step="0.01"
+              >
+
+            </div>
+
+            <div class="form-group form-group-full">
+
+              <label>
+                নোট
+              </label>
+
+              <textarea
+                name="note"
+                rows="3"
+              ></textarea>
+
+            </div>
+
+          </div>
+
+          <div class="modal-footer">
+
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-modal-cancel
+            >
+              বাতিল
+            </button>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              আদায় সংরক্ষণ
+            </button>
+
+          </div>
+
+        </form>
+      `
+    );
+
+  loadCollectionAccounts(
+    modal
+  );
+
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
+
+  modal
+    .querySelector(
+      "#customer-collection-form"
+    )
+    ?.addEventListener(
+      "submit",
+      submitCustomerCollection
+    );
+}
+
+async function loadCollectionAccounts(
+  modal
+) {
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/accounts"
+      );
+
+    const accounts =
+      Array.isArray(data)
+        ? data
+        : data.accounts || [];
+
+    const select =
+      modal.querySelector(
+        "#collection-account"
+      );
+
+    if (!select) return;
+
+    select.innerHTML = `
+      <option value="">
+        — নির্বাচন করুন —
+      </option>
+
+      ${accounts
+        .filter(
+          account =>
+            [
+              1000,
+              1010,
+              1020,
+              1030,
+              1040,
+              1050,
+              1060,
+              1070
+            ].includes(
+              Number(account.id)
+            )
+        )
+        .map(
+          account => `
+            <option value="${account.id}">
+              ${escapeHtml(
+                account.name
+              )}
+            </option>
+          `
+        ).join("")}
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "অ্যাকাউন্ট লোড করা যায়নি।"
+    );
+  }
+}
+
+async function submitCustomerCollection(
+  event
+) {
+
+  event.preventDefault();
+
+  const form =
+    event.currentTarget;
+
+  const formData =
+    new FormData(form);
+
+  const payload = {
+
+    customer_id:
+      Number(
+        formData.get(
+          "customer_id"
+        )
+      ),
+
+    collection_date:
+      formData.get(
+        "collection_date"
+      ) || today(),
+
+    account_id:
+      Number(
+        formData.get(
+          "account_id"
+        )
+      ),
+
+    amount:
+      Number(
+        formData.get(
+          "amount"
+        ) || 0
+      ),
+
+    note:
+      String(
+        formData.get(
+          "note"
+        ) || ""
+      ).trim()
+  };
+
+  if (
+    !payload.customer_id
+  ) {
+
+    showError(
+      "কাস্টমার নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  if (
+    !payload.account_id
+  ) {
+
+    showError(
+      "আদায়ের অ্যাকাউন্ট নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  if (
+    payload.amount <= 0
+  ) {
+
+    showError(
+      "আদায়ের পরিমাণ ০-এর বেশি হতে হবে।"
+    );
+
+    return;
+  }
+
+  try {
+
+    setLoading(true);
+
+    await postJson(
+      "/api/transactions/customer-collection",
+      payload
+    );
+
+    showSuccess(
+      "কাস্টমার বাকি আদায় সংরক্ষণ হয়েছে।"
+    );
+
+    closeModal();
+
+    await loadCustomerDue();
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "বাকি আদায় সংরক্ষণ করা যায়নি।"
+    );
+
+  } finally {
+
+    setLoading(false);
+  }
+}
+
+async function openCustomerLedger(
+  customer
+) {
+
+  const modal =
+    openModal(
+      `কাস্টমার লেজার — ${customer.name}`,
+
+      loadingHtml(
+        "লেজার লোড হচ্ছে..."
+      ),
+
+      {
+        large: true
+      }
+    );
+
+  try {
+
+    const data =
+      await getJson(
+        `/api/ledgers/customer/${customer.id}`
+      );
+
+    const entries =
+      Array.isArray(data)
+        ? data
+        : data.entries || [];
+
+    const body =
+      modal.querySelector(
+        ".modal-body"
+      );
+
+    if (!body) return;
+
+    body.innerHTML = `
+
+      <div class="ledger-summary">
+
+        <div class="mini-card">
+
+          <div class="mini-card-title">
+            বর্তমান বাকি
+          </div>
+
+          <div class="mini-card-value">
+            ৳ ${formatMoney(
+              customer.current_due || 0
+            )}
+          </div>
+
+        </div>
+
+      </div>
+
+      ${
+        entries.length
+          ? `
+            <div class="table-wrapper">
+
+              <table class="data-table">
+
+                <thead>
+
+                  <tr>
+                    <th>তারিখ</th>
+                    <th>ধরন</th>
+                    <th>রেফারেন্স</th>
+                    <th>ডেবিট</th>
+                    <th>ক্রেডিট</th>
+                    <th>ব্যালেন্স</th>
+                  </tr>
+
+                </thead>
+
+                <tbody>
+
+                  ${entries.map(
+                    entry => `
+                      <tr>
+
+                        <td>
+                          ${escapeHtml(
+                            entry.date ||
+                            entry.transaction_date ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            entry.type ||
+                            entry.transaction_type ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            entry.reference ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            entry.debit ||
+                            entry.debit_amount ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            entry.credit ||
+                            entry.credit_amount ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            entry.balance ||
+                            0
+                          )}
+                        </td>
+
+                      </tr>
+                    `
+                  ).join("")}
+
+                </tbody>
+
+              </table>
+
+            </div>
+          `
+          : emptyHtml(
+              "এই কাস্টমারের কোনো লেজার পাওয়া যায়নি।"
+            )
+      }
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    const body =
+      modal.querySelector(
+        ".modal-body"
+      );
+
+    if (body) {
+
+      body.innerHTML =
+        errorHtml(
+          error.message ||
+          "লেজার লোড করা যায়নি।"
+        );
+    }
+  }
+}
+
+/* =========================================================
+   SUPPLIER DUE
+   ========================================================= */
+
+async function renderSupplierDue() {
+
+  if (!app) return;
+
+  app.innerHTML = `
+    <section class="page supplier-due-page">
+
+      <div class="page-toolbar">
+
+        <div>
+
+          <h2>সাপ্লায়ার বাকি</h2>
+
+          <p class="muted">
+            সাপ্লায়ার পাওনা, পেমেন্ট ও লেজার
+          </p>
+
+        </div>
+
+        <div class="toolbar-actions">
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="new-supplier-payment"
+          >
+            + সাপ্লায়ার পেমেন্ট
+          </button>
+
+        </div>
+
+      </div>
+
+      <div id="supplier-due-content">
+        ${loadingHtml(
+          "সাপ্লায়ার বাকি লোড হচ্ছে..."
+        )}
+      </div>
+
+    </section>
+  `;
+
+  document
+    .getElementById(
+      "new-supplier-payment"
+    )
+    ?.addEventListener(
+      "click",
+      () =>
+        openSupplierPaymentModal()
+    );
+
+  await loadSupplierDue();
+}
+
+async function loadSupplierDue() {
+
+  const container =
+    document.getElementById(
+      "supplier-due-content"
+    );
+
+  if (!container) return;
+
+  container.innerHTML =
+    loadingHtml(
+      "সাপ্লায়ার বাকি লোড হচ্ছে..."
+    );
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/suppliers"
+      );
+
+    const suppliers =
+      Array.isArray(data)
+        ? data
+        : data.suppliers || [];
+
+    state.suppliers =
+      suppliers;
+
+    container.innerHTML = `
+
+      <div class="table-wrapper">
+
+        <table class="data-table">
+
+          <thead>
+
+            <tr>
+              <th>সাপ্লায়ার</th>
+              <th>ফোন</th>
+              <th>বর্তমান পাওনা</th>
+              <th>অ্যাকশন</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            ${
+              suppliers.length
+                ? suppliers.map(
+                    supplier => `
+                      <tr>
+
+                        <td>
+                          <strong>
+                            ${escapeHtml(
+                              supplier.name
+                            )}
+                          </strong>
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            supplier.phone ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            supplier.current_due ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+
+                          <div class="action-buttons">
+
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-primary"
+                              data-pay-supplier="${supplier.id}"
+                            >
+                              পেমেন্ট
+                            </button>
+
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-secondary"
+                              data-supplier-ledger="${supplier.id}"
+                            >
+                              লেজার
+                            </button>
+
+                          </div>
+
+                        </td>
+
+                      </tr>
+                    `
+                  ).join("")
+                : `
+                    <tr>
+
+                      <td
+                        colspan="4"
+                        class="text-center"
+                      >
+                        কোনো সাপ্লায়ার নেই।
+                      </td>
+
+                    </tr>
+                  `
+            }
+
+          </tbody>
+
+        </table>
+
+      </div>
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    container.innerHTML =
+      errorHtml(
+        error.message ||
+        "সাপ্লায়ার বাকি লোড করা যায়নি।"
+      );
+  }
+}
+
+document.addEventListener(
+  "click",
+  event => {
+
+    const payButton =
+      event.target.closest(
+        "[data-pay-supplier]"
+      );
+
+    if (payButton) {
+
+      const id =
+        Number(
+          payButton.dataset
+            .paySupplier
+        );
+
+      const supplier =
+        state.suppliers.find(
+          item =>
+            Number(item.id) === id
+        );
+
+      if (supplier) {
+        openSupplierPaymentModal(
+          supplier
+        );
+      }
+
+      return;
+    }
+
+    const ledgerButton =
+      event.target.closest(
+        "[data-supplier-ledger]"
+      );
+
+    if (ledgerButton) {
+
+      const id =
+        Number(
+          ledgerButton.dataset
+            .supplierLedger
+        );
+
+      const supplier =
+        state.suppliers.find(
+          item =>
+            Number(item.id) === id
+        );
+
+      if (supplier) {
+        openSupplierLedger(
+          supplier
+        );
+      }
+    }
+  }
+);
+
+function openSupplierPaymentModal(
+  supplier = null
+) {
+
+  const modal =
+    openModal(
+      "সাপ্লায়ার পেমেন্ট",
+
+      `
+        <form id="supplier-payment-form">
 
           <div class="form-grid">
 
@@ -1221,1764 +5508,2023 @@ async function renderPurchase() {
               </label>
 
               <select
-                id="purchaseSupplier"
-                class="form-control"
+                name="supplier_id"
                 required
               >
 
                 <option value="">
-                  সাপ্লায়ার নির্বাচন করুন
+                  — নির্বাচন করুন —
                 </option>
 
-                ${suppliers.map(supplier => `
-
-                  <option value="${supplier.id}">
-
-                    ${escapeHtml(
-                      supplier.name
-                    )}
-
-                    ${
-                      supplier.phone
-                        ? ` — ${escapeHtml(
-                            supplier.phone
-                          )}`
-                        : ""
-                    }
-
-                  </option>
-
-                `).join("")}
+                ${state.suppliers.map(
+                  item => `
+                    <option
+                      value="${item.id}"
+                      ${
+                        supplier &&
+                        Number(
+                          supplier.id
+                        ) ===
+                        Number(item.id)
+                          ? "selected"
+                          : ""
+                      }
+                    >
+                      ${escapeHtml(
+                        item.name
+                      )}
+                    </option>
+                  `
+                ).join("")}
 
               </select>
 
             </div>
 
+            <div class="form-group">
+
+              <label>
+                তারিখ *
+              </label>
+
+              <input
+                type="date"
+                name="payment_date"
+                required
+                value="${today()}"
+              >
+
+            </div>
 
             <div class="form-group">
 
               <label>
-                পেমেন্ট Account *
+                পেমেন্ট অ্যাকাউন্ট *
               </label>
 
               <select
-                id="purchasePaymentAccount"
-                class="form-control"
+                name="account_id"
+                required
+                id="supplier-payment-account"
               >
 
-                ${paymentAccountOptions(
-                  accounts
-                )}
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
 
               </select>
 
             </div>
 
-
             <div class="form-group">
 
               <label>
-                ক্রয়ের তারিখ
+                পরিমাণ *
               </label>
 
               <input
-                id="purchaseDate"
-                class="form-control"
-                type="date"
-                value="${todayDate()}"
+                type="number"
+                name="amount"
+                required
+                min="0.01"
+                step="0.01"
               >
 
             </div>
 
-
-            <div class="form-group">
+            <div class="form-group form-group-full">
 
               <label>
-                Reference / Invoice No.
+                নোট
               </label>
 
-              <input
-                id="purchaseReference"
-                class="form-control"
-                maxlength="100"
-                placeholder="ঐচ্ছিক"
-              >
+              <textarea
+                name="note"
+                rows="3"
+              ></textarea>
 
             </div>
 
           </div>
 
+          <div class="modal-footer">
 
-          <!-- ================= ADD PRODUCT ================= -->
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-modal-cancel
+            >
+              বাতিল
+            </button>
 
-          <div
-            class="card"
-            style="margin-top:20px;"
-          >
-
-            <div class="card-header">
-
-              <h3>
-                পণ্য যোগ করুন
-              </h3>
-
-            </div>
-
-
-            <div class="card-body">
-
-              <div class="form-grid">
-
-                <div class="form-group">
-
-                  <label>
-                    পণ্য *
-                  </label>
-
-                  <select
-                    id="purchaseProduct"
-                    class="form-control"
-                  >
-
-                    <option value="">
-                      পণ্য নির্বাচন করুন
-                    </option>
-
-                    ${products.map(product => `
-
-                      <option
-                        value="${product.id}"
-                        data-cost="${product.purchase_price ?? product.cost_price ?? 0}"
-                      >
-
-                        ${escapeHtml(
-                          product.name
-                        )}
-
-                        ${
-                          product.sku
-                            ? ` (${escapeHtml(
-                                product.sku
-                              )})`
-                            : ""
-                        }
-
-                      </option>
-
-                    `).join("")}
-
-                  </select>
-
-                </div>
-
-
-                <div class="form-group">
-
-                  <label>
-                    Quantity *
-                  </label>
-
-                  <input
-                    id="purchaseQuantity"
-                    class="form-control"
-                    type="number"
-                    min="0.001"
-                    step="0.001"
-                    value="1"
-                  >
-
-                </div>
-
-
-                <div class="form-group">
-
-                  <label>
-                    Unit Cost *
-                  </label>
-
-                  <input
-                    id="purchaseUnitCost"
-                    class="form-control"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value="0"
-                  >
-
-                </div>
-
-
-                <div class="form-group">
-
-                  <label>
-                    Line Total
-                  </label>
-
-                  <input
-                    id="purchaseLineTotal"
-                    class="form-control"
-                    type="number"
-                    readonly
-                    value="0"
-                  >
-
-                </div>
-
-              </div>
-
-
-              <div class="form-actions">
-
-                <button
-                  id="addPurchaseItemBtn"
-                  type="button"
-                  class="btn btn-primary"
-                >
-                  + পণ্য যোগ করুন
-                </button>
-
-              </div>
-
-            </div>
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              পেমেন্ট সংরক্ষণ
+            </button>
 
           </div>
 
+        </form>
+      `
+    );
 
-          <!-- ================= PURCHASE ITEMS ================= -->
+  loadSupplierPaymentAccounts(
+    modal
+  );
 
-          <div
-            class="card"
-            style="margin-top:20px;"
-          >
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
 
-            <div class="card-header">
+  modal
+    .querySelector(
+      "#supplier-payment-form"
+    )
+    ?.addEventListener(
+      "submit",
+      submitSupplierPayment
+    );
+}
 
-              <h3>
-                ক্রয়ের পণ্যসমূহ
-              </h3>
+async function loadSupplierPaymentAccounts(
+  modal
+) {
 
-              <span
-                id="purchaseItemCount"
-                class="badge badge-info"
-              >
-                0 item
-              </span>
+  try {
 
-            </div>
+    const data =
+      await getJson(
+        "/api/accounts"
+      );
 
+    const accounts =
+      Array.isArray(data)
+        ? data
+        : data.accounts || [];
 
-            <div class="card-body">
+    const select =
+      modal.querySelector(
+        "#supplier-payment-account"
+      );
 
-              <div
-                id="purchaseItemsTable"
-                class="table-wrapper"
-              >
+    if (!select) return;
 
-                ${purchaseItemsTableHtml()}
+    select.innerHTML = `
+      <option value="">
+        — নির্বাচন করুন —
+      </option>
 
-              </div>
-
-            </div>
-
-          </div>
-
-
-          <!-- ================= PAYMENT ================= -->
-
-          <div
-            class="card"
-            style="margin-top:20px;"
-          >
-
-            <div class="card-header">
-
-              <h3>
-                পেমেন্ট
-              </h3>
-
-            </div>
-
-
-            <div class="card-body">
-
-              <div class="form-grid">
-
-                <div class="form-group">
-
-                  <label>
-                    মোট ক্রয়
-                  </label>
-
-                  <input
-                    id="purchaseGrandTotal"
-                    class="form-control"
-                    readonly
-                    value="0"
-                  >
-
-                </div>
-
-
-                <div class="form-group">
-
-                  <label>
-                    এখন পরিশোধ
-                  </label>
-
-                  <input
-                    id="purchasePaidAmount"
-                    class="form-control"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value="0"
-                  >
-
-                </div>
-
-
-                <div class="form-group">
-
-                  <label>
-                    Supplier Due
-                  </label>
-
-                  <input
-                    id="purchaseDueAmount"
-                    class="form-control"
-                    readonly
-                    value="0"
-                  >
-
-                </div>
-
-              </div>
-
-
-              <div class="form-actions">
-
-                <button
-                  id="clearPurchaseBtn"
-                  type="button"
-                  class="btn btn-light"
-                >
-                  পরিষ্কার
-                </button>
-
-                <button
-                  id="savePurchaseBtn"
-                  type="button"
-                  class="btn btn-success"
-                >
-                  ✓ ক্রয় সংরক্ষণ
-                </button>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-      </div>
-
+      ${accounts
+        .filter(
+          account =>
+            [
+              1000,
+              1010,
+              1020,
+              1030,
+              1040,
+              1050,
+              1060,
+              1070
+            ].includes(
+              Number(account.id)
+            )
+        )
+        .map(
+          account => `
+            <option value="${account.id}">
+              ${escapeHtml(
+                account.name
+              )}
+            </option>
+          `
+        ).join("")}
     `;
-
-
-    bindPurchaseEvents();
-
-    updatePurchaseTotals();
-
 
   } catch (error) {
 
-    renderError(error);
+    console.error(error);
 
-  } finally {
-
-    hideLoading();
-
+    showError(
+      error.message ||
+      "অ্যাকাউন্ট লোড করা যায়নি।"
+    );
   }
-
 }
 
+async function submitSupplierPayment(
+  event
+) {
 
-/* =========================================================
-   PAYMENT ACCOUNT OPTIONS
-   ========================================================= */
+  event.preventDefault();
 
-function paymentAccountOptions(accounts) {
+  const form =
+    event.currentTarget;
 
-  const allowedNames = [
-    "Cash",
-    "bKash",
-    "Nagad",
-    "Rocket"
-  ];
-
-
-  const filtered =
-    accounts.filter(account => {
-
-      const name =
-        String(
-          account.name || ""
-        ).toLowerCase();
-
-      return allowedNames.some(
-        allowed =>
-          name === allowed.toLowerCase()
-      );
-
-    });
-
-
-  if (!filtered.length) {
-
-    return `
-
-      <option value="1000">
-        Cash
-      </option>
-
-    `;
-
-  }
-
-
-  return filtered.map(account => `
-
-    <option value="${account.id}">
-
-      ${escapeHtml(
-        account.name
-      )}
-
-    </option>
-
-  `).join("");
-
-}
-
-
-/* =========================================================
-   TODAY DATE
-   ========================================================= */
-
-function todayDate() {
-
-  const date = new Date();
-
-  const year =
-    date.getFullYear();
-
-  const month =
-    String(
-      date.getMonth() + 1
-    ).padStart(2, "0");
-
-  const day =
-    String(
-      date.getDate()
-    ).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-
-}
-
-
-/* =========================================================
-   BIND PURCHASE EVENTS
-   ========================================================= */
-
-function bindPurchaseEvents() {
-
-
-  const productSelect =
-    $("#purchaseProduct");
-
-
-  const quantityInput =
-    $("#purchaseQuantity");
-
-
-  const costInput =
-    $("#purchaseUnitCost");
-
-
-  productSelect.addEventListener(
-    "change",
-    () => {
-
-      const selected =
-        productSelect.options[
-          productSelect.selectedIndex
-        ];
-
-
-      if (!selected) {
-        return;
-      }
-
-
-      const cost =
-        Number(
-          selected.dataset.cost || 0
-        );
-
-
-      costInput.value =
-        cost.toFixed(2);
-
-
-      updatePurchaseLineTotal();
-
-    }
-  );
-
-
-  quantityInput.addEventListener(
-    "input",
-    updatePurchaseLineTotal
-  );
-
-
-  costInput.addEventListener(
-    "input",
-    updatePurchaseLineTotal
-  );
-
-
-  $("#addPurchaseItemBtn")
-    .addEventListener(
-      "click",
-      addPurchaseItem
-    );
-
-
-  $("#purchasePaidAmount")
-    .addEventListener(
-      "input",
-      updatePurchaseTotals
-    );
-
-
-  $("#savePurchaseBtn")
-    .addEventListener(
-      "click",
-      savePurchase
-    );
-
-
-  $("#clearPurchaseBtn")
-    .addEventListener(
-      "click",
-      () => navigate("purchase")
-    );
-
-}
-
-
-/* =========================================================
-   PURCHASE LINE TOTAL
-   ========================================================= */
-
-function updatePurchaseLineTotal() {
-
-  const quantity =
-    Number(
-      $("#purchaseQuantity")?.value || 0
-    );
-
-
-  const unitCost =
-    Number(
-      $("#purchaseUnitCost")?.value || 0
-    );
-
-
-  const total =
-    quantity * unitCost;
-
-
-  if ($("#purchaseLineTotal")) {
-
-    $("#purchaseLineTotal").value =
-      total.toFixed(2);
-
-  }
-
-}
-
-
-/* =========================================================
-   ADD PURCHASE ITEM
-   ========================================================= */
-
-function addPurchaseItem() {
-
-  const productId =
-    $("#purchaseProduct").value;
-
-
-  const productSelect =
-    $("#purchaseProduct");
-
-
-  const selected =
-    productSelect.options[
-      productSelect.selectedIndex
-    ];
-
-
-  const quantity =
-    Number(
-      $("#purchaseQuantity").value || 0
-    );
-
-
-  const unitCost =
-    Number(
-      $("#purchaseUnitCost").value || 0
-    );
-
-
-  if (!productId) {
-
-    showToast(
-      "পণ্য নির্বাচন করুন",
-      "error"
-    );
-
-    return;
-
-  }
-
-
-  if (
-    !Number.isFinite(quantity) ||
-    quantity <= 0
-  ) {
-
-    showToast(
-      "সঠিক Quantity দিন",
-      "error"
-    );
-
-    return;
-
-  }
-
-
-  if (
-    !Number.isFinite(unitCost) ||
-    unitCost < 0
-  ) {
-
-    showToast(
-      "সঠিক Unit Cost দিন",
-      "error"
-    );
-
-    return;
-
-  }
-
-
-  const existingIndex =
-    purchaseItems.findIndex(
-      item =>
-        String(item.product_id) ===
-        String(productId)
-    );
-
-
-  if (existingIndex !== -1) {
-
-    /*
-      একই Invoice-এ একই product দ্বিতীয়বার
-      আলাদা row না রেখে quantity যোগ করা হবে।
-
-      Cost পরিবর্তন করলে নতুন weighted/FIFO lot
-      তৈরি করার সুযোগ backend-এ থাকবে।
-    */
-
-    purchaseItems[
-      existingIndex
-    ].quantity += quantity;
-
-    purchaseItems[
-      existingIndex
-    ].unit_cost = unitCost;
-
-  } else {
-
-    purchaseItems.push({
-
-      product_id:
-        Number(productId),
-
-      product_name:
-        selected.textContent.trim(),
-
-      quantity,
-
-      unit_cost:
-        unitCost,
-
-      total:
-        quantity * unitCost
-
-    });
-
-  }
-
-
-  purchaseItems =
-    purchaseItems.map(item => ({
-
-      ...item,
-
-      total:
-        Number(item.quantity) *
-        Number(item.unit_cost)
-
-    }));
-
-
-  renderPurchaseItems();
-
-  updatePurchaseTotals();
-
-
-  $("#purchaseProduct").value = "";
-
-  $("#purchaseQuantity").value = "1";
-
-  $("#purchaseUnitCost").value = "0";
-
-  $("#purchaseLineTotal").value = "0";
-
-}
-
-
-/* =========================================================
-   PURCHASE ITEMS TABLE
-   ========================================================= */
-
-function purchaseItemsTableHtml() {
-
-  if (!purchaseItems.length) {
-
-    return `
-
-      <div class="empty-state">
-
-        <div class="icon">
-          🛒
-        </div>
-
-        <strong>
-          এখনো কোনো পণ্য যোগ করা হয়নি
-        </strong>
-
-        <span>
-          উপরের Product section থেকে পণ্য যোগ করুন
-        </span>
-
-      </div>
-
-    `;
-
-  }
-
-
-  return `
-
-    <table class="data-table">
-
-      <thead>
-
-        <tr>
-
-          <th>#</th>
-
-          <th>
-            পণ্য
-          </th>
-
-          <th class="text-right">
-            Quantity
-          </th>
-
-          <th class="text-right">
-            Unit Cost
-          </th>
-
-          <th class="text-right">
-            Total
-          </th>
-
-          <th>
-            Action
-          </th>
-
-        </tr>
-
-      </thead>
-
-
-      <tbody>
-
-        ${purchaseItems.map(
-          (item, index) => `
-
-            <tr>
-
-              <td>
-                ${index + 1}
-              </td>
-
-              <td>
-                <strong>
-                  ${escapeHtml(
-                    item.product_name
-                  )}
-                </strong>
-              </td>
-
-              <td class="text-right">
-                ${number(
-                  item.quantity
-                )}
-              </td>
-
-              <td class="text-right">
-                ৳${money(
-                  item.unit_cost
-                )}
-              </td>
-
-              <td class="text-right">
-                <strong>
-                  ৳${money(
-                    item.total
-                  )}
-                </strong>
-              </td>
-
-              <td>
-
-                <button
-                  type="button"
-                  class="btn btn-danger btn-small"
-                  data-remove-purchase-item="${index}"
-                >
-                  Remove
-                </button>
-
-              </td>
-
-            </tr>
-
-          `
-        ).join("")}
-
-      </tbody>
-
-    </table>
-
-  `;
-
-}
-
-
-/* =========================================================
-   RENDER PURCHASE ITEMS
-   ========================================================= */
-
-function renderPurchaseItems() {
-
-  const container =
-    $("#purchaseItemsTable");
-
-
-  if (!container) {
-    return;
-  }
-
-
-  container.innerHTML =
-    purchaseItemsTableHtml();
-
-
-  document
-    .querySelectorAll(
-      "[data-remove-purchase-item]"
-    )
-    .forEach(button => {
-
-      button.addEventListener(
-        "click",
-        () => {
-
-          const index =
-            Number(
-              button.dataset
-                .removePurchaseItem
-            );
-
-
-          purchaseItems.splice(
-            index,
-            1
-          );
-
-
-          renderPurchaseItems();
-
-          updatePurchaseTotals();
-
-        }
-      );
-
-    });
-
-
-  const count =
-    $("#purchaseItemCount");
-
-
-  if (count) {
-
-    count.textContent =
-      `${purchaseItems.length} item`;
-
-  }
-
-}
-
-
-/* =========================================================
-   PURCHASE TOTALS
-   ========================================================= */
-
-function updatePurchaseTotals() {
-
-  const grandTotal =
-    purchaseItems.reduce(
-      (sum, item) =>
-        sum +
-        Number(item.total || 0),
-      0
-    );
-
-
-  const paid =
-    Number(
-      $("#purchasePaidAmount")?.value ||
-      0
-    );
-
-
-  const due =
-    Math.max(
-      grandTotal - paid,
-      0
-    );
-
-
-  if ($("#purchaseGrandTotal")) {
-
-    $("#purchaseGrandTotal").value =
-      grandTotal.toFixed(2);
-
-  }
-
-
-  if ($("#purchaseDueAmount")) {
-
-    $("#purchaseDueAmount").value =
-      due.toFixed(2);
-
-  }
-
-
-  const paidInput =
-    $("#purchasePaidAmount");
-
-
-  if (paidInput) {
-
-    paidInput.max =
-      grandTotal.toFixed(2);
-
-  }
-
-}
-
-
-/* =========================================================
-   SAVE PURCHASE
-   ========================================================= */
-
-async function savePurchase() {
-
-  const supplierId =
-    Number(
-      $("#purchaseSupplier").value || 0
-    );
-
-
-  const paymentAccountId =
-    Number(
-      $("#purchasePaymentAccount").value ||
-      1000
-    );
-
-
-  const purchaseDate =
-    $("#purchaseDate").value ||
-    todayDate();
-
-
-  const reference =
-    $("#purchaseReference")
-      .value
-      .trim();
-
-
-  const grandTotal =
-    purchaseItems.reduce(
-      (sum, item) =>
-        sum +
-        Number(item.total || 0),
-      0
-    );
-
-
-  const paidAmount =
-    Number(
-      $("#purchasePaidAmount").value || 0
-    );
-
-
-  if (!supplierId) {
-
-    showToast(
-      "সাপ্লায়ার নির্বাচন করুন",
-      "error"
-    );
-
-    return;
-
-  }
-
-
-  if (!purchaseItems.length) {
-
-    showToast(
-      "কমপক্ষে একটি পণ্য যোগ করুন",
-      "error"
-    );
-
-    return;
-
-  }
-
-
-  if (
-    paidAmount < 0 ||
-    paidAmount > grandTotal
-  ) {
-
-    showToast(
-      "Paid Amount সঠিক নয়",
-      "error"
-    );
-
-    return;
-
-  }
-
-
-  const dueAmount =
-    grandTotal - paidAmount;
-
-
-  /*
-    Backend Transaction Engine-এর
-    createPurchase payload.
-  */
+  const formData =
+    new FormData(form);
 
   const payload = {
 
     supplier_id:
-      supplierId,
+      Number(
+        formData.get(
+          "supplier_id"
+        )
+      ),
 
-    payment_account_id:
-      paymentAccountId,
+    payment_date:
+      formData.get(
+        "payment_date"
+      ) || today(),
 
-    purchase_date:
-      purchaseDate,
+    account_id:
+      Number(
+        formData.get(
+          "account_id"
+        )
+      ),
 
-    reference:
-      reference || null,
+    amount:
+      Number(
+        formData.get(
+          "amount"
+        ) || 0
+      ),
 
-    total_amount:
-      grandTotal,
-
-    paid_amount:
-      paidAmount,
-
-    due_amount:
-      dueAmount,
-
-    items:
-      purchaseItems.map(item => ({
-
-        product_id:
-          Number(
-            item.product_id
-          ),
-
-        quantity:
-          Number(
-            item.quantity
-          ),
-
-        unit_cost:
-          Number(
-            item.unit_cost
-          ),
-
-        total:
-          Number(
-            item.total
-          )
-
-      }))
-
+    note:
+      String(
+        formData.get(
+          "note"
+        ) || ""
+      ).trim()
   };
 
+  if (
+    !payload.supplier_id
+  ) {
+
+    showError(
+      "সাপ্লায়ার নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  if (
+    !payload.account_id
+  ) {
+
+    showError(
+      "পেমেন্ট অ্যাকাউন্ট নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  if (
+    payload.amount <= 0
+  ) {
+
+    showError(
+      "পেমেন্টের পরিমাণ ০-এর বেশি হতে হবে।"
+    );
+
+    return;
+  }
 
   try {
 
-    showLoading(
-      "ক্রয় সংরক্ষণ হচ্ছে..."
+    setLoading(true);
+
+    await postJson(
+      "/api/transactions/supplier-payment",
+      payload
     );
 
-
-    /*
-      Duplicate mobile/network submission
-      ঠেকানোর জন্য unique idempotency key.
-    */
-
-    const idempotencyKey =
-      crypto.randomUUID();
-
-
-    await api(
-      "/api/transactions/purchase",
-      {
-
-        method: "POST",
-
-        headers: {
-
-          "Idempotency-Key":
-            idempotencyKey
-
-        },
-
-        body:
-          JSON.stringify(
-            payload
-          )
-
-      }
+    showSuccess(
+      "সাপ্লায়ার পেমেন্ট সংরক্ষণ হয়েছে।"
     );
 
+    closeModal();
 
-    showToast(
-      "ক্রয় সফলভাবে সংরক্ষণ হয়েছে"
-    );
-
-
-    /*
-      Save হওয়ার পরে নতুন Purchase screen.
-      Dashboard data পরেরবার reload হবে।
-    */
-
-    await navigate("purchase");
-
+    await loadSupplierDue();
 
   } catch (error) {
 
-    console.error(
-      "Purchase save failed:",
-      error
-    );
+    console.error(error);
 
-
-    showToast(
+    showError(
       error.message ||
-      "ক্রয় সংরক্ষণ করা যায়নি",
-      "error"
+      "সাপ্লায়ার পেমেন্ট সংরক্ষণ করা যায়নি।"
     );
 
   } finally {
 
-    hideLoading();
-
+    setLoading(false);
   }
-
 }
-// ============================================================
-// SALES MODULE
-// ============================================================
 
-let saleProducts = [];
-let saleCustomers = [];
-let saleAccounts = [];
-let saleItems = [];
+async function openSupplierLedger(
+  supplier
+) {
 
-async function renderSale() {
+  const modal =
+    openModal(
+      `সাপ্লায়ার লেজার — ${supplier.name}`,
+
+      loadingHtml(
+        "লেজার লোড হচ্ছে..."
+      ),
+
+      {
+        large: true
+      }
+    );
+
+  try {
+
+    const data =
+      await getJson(
+        `/api/ledgers/supplier/${supplier.id}`
+      );
+
+    const entries =
+      Array.isArray(data)
+        ? data
+        : data.entries || [];
+
+    const body =
+      modal.querySelector(
+        ".modal-body"
+      );
+
+    if (!body) return;
+
+    body.innerHTML = `
+
+      <div class="ledger-summary">
+
+        <div class="mini-card">
+
+          <div class="mini-card-title">
+            বর্তমান পাওনা
+          </div>
+
+          <div class="mini-card-value">
+            ৳ ${formatMoney(
+              supplier.current_due || 0
+            )}
+          </div>
+
+        </div>
+
+      </div>
+
+      ${
+        entries.length
+          ? `
+            <div class="table-wrapper">
+
+              <table class="data-table">
+
+                <thead>
+
+                  <tr>
+                    <th>তারিখ</th>
+                    <th>ধরন</th>
+                    <th>রেফারেন্স</th>
+                    <th>ডেবিট</th>
+                    <th>ক্রেডিট</th>
+                    <th>ব্যালেন্স</th>
+                  </tr>
+
+                </thead>
+
+                <tbody>
+
+                  ${entries.map(
+                    entry => `
+                      <tr>
+
+                        <td>
+                          ${escapeHtml(
+                            entry.date ||
+                            entry.transaction_date ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            entry.type ||
+                            entry.transaction_type ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            entry.reference ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            entry.debit ||
+                            entry.debit_amount ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            entry.credit ||
+                            entry.credit_amount ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            entry.balance ||
+                            0
+                          )}
+                        </td>
+
+                      </tr>
+                    `
+                  ).join("")}
+
+                </tbody>
+
+              </table>
+
+            </div>
+          `
+          : emptyHtml(
+              "এই সাপ্লায়ারের কোনো লেজার পাওয়া যায়নি।"
+            )
+      }
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    const body =
+      modal.querySelector(
+        ".modal-body"
+      );
+
+    if (body) {
+
+      body.innerHTML =
+        errorHtml(
+          error.message ||
+          "লেজার লোড করা যায়নি।"
+        );
+    }
+  }
+}
+
+/* =========================================================
+   EXPENSE
+   ========================================================= */
+
+async function renderExpense() {
+
+  if (!app) return;
+
   app.innerHTML = `
-    <section class="page-header">
-      <div>
-        <h1>বিক্রয়</h1>
-        <p>একাধিক পণ্যসহ বিক্রয় Invoice</p>
-      </div>
-    </section>
+    <section class="page expense-page">
 
-    <section class="card">
-      <div class="form-grid">
+      <div class="page-toolbar">
 
-        <div class="form-group">
-          <label>বিক্রয়ের তারিখ</label>
-          <input
-            id="saleDate"
-            type="date"
-            value="${todayDate()}"
+        <div>
+
+          <h2>খরচ</h2>
+
+          <p class="muted">
+            দোকান ও পারিবারিক খরচ
+          </p>
+
+        </div>
+
+        <div class="toolbar-actions">
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="new-expense-btn"
           >
-        </div>
+            + নতুন খরচ
+          </button>
 
-        <div class="form-group">
-          <label>Customer</label>
-          <select id="saleCustomer">
-            <option value="">Cash Customer</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Payment Account</label>
-          <select id="salePaymentAccount">
-            <option value="">Payment Account নির্বাচন</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Reference</label>
-          <input
-            id="saleReference"
-            type="text"
-            placeholder="Invoice / Note"
-          >
-        </div>
-
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-title">
-        <h2>পণ্য যোগ করুন</h2>
-      </div>
-
-      <div class="form-grid">
-
-        <div class="form-group">
-          <label>Product</label>
-          <select id="saleProduct">
-            <option value="">পণ্য নির্বাচন</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Quantity</label>
-          <input
-            id="saleQty"
-            type="number"
-            min="0.001"
-            step="0.001"
-            placeholder="0"
-          >
-        </div>
-
-        <div class="form-group">
-          <label>Unit Sale Price</label>
-          <input
-            id="saleUnitPrice"
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="0.00"
-          >
-        </div>
-
-        <div class="form-group">
-          <label>Total</label>
-          <input
-            id="saleLineTotal"
-            type="number"
-            readonly
-            value="0"
-          >
         </div>
 
       </div>
 
-      <div class="form-actions">
-        <button
-          id="addSaleItemBtn"
-          class="btn btn-primary"
-          type="button"
-        >
-          + পণ্য যোগ করুন
-        </button>
+      <div
+        id="expense-content"
+      >
+        ${loadingHtml(
+          "খরচের হিসাব লোড হচ্ছে..."
+        )}
       </div>
-    </section>
-
-    <section class="card">
-
-      <div class="section-title">
-        <h2>বিক্রয় পণ্যসমূহ</h2>
-      </div>
-
-      <div id="saleItemsContainer">
-        <div class="empty-state">
-          এখনো কোনো পণ্য যোগ করা হয়নি।
-        </div>
-      </div>
-
-    </section>
-
-    <section class="card">
-
-      <div class="sale-summary">
-
-        <div class="summary-row">
-          <span>মোট বিক্রয়</span>
-          <strong id="saleGrandTotal">৳0.00</strong>
-        </div>
-
-        <div class="summary-row">
-          <span>Paid</span>
-          <strong id="salePaidAmount">৳0.00</strong>
-        </div>
-
-        <div class="summary-row">
-          <span>Customer Due</span>
-          <strong id="saleDueAmount">৳0.00</strong>
-        </div>
-
-      </div>
-
-      <div class="form-grid">
-
-        <div class="form-group">
-          <label>Paid Amount</label>
-          <input
-            id="salePaidInput"
-            type="number"
-            min="0"
-            step="0.01"
-            value="0"
-          >
-        </div>
-
-      </div>
-
-      <div class="form-actions">
-
-        <button
-          id="saveSaleBtn"
-          class="btn btn-primary"
-          type="button"
-        >
-          বিক্রয় সংরক্ষণ
-        </button>
-
-      </div>
-
-      <div id="saleMessage"></div>
 
     </section>
   `;
 
-  await loadSaleData();
-  bindSaleEvents();
-  renderSaleItems();
-  updateSaleTotals();
-}
-
-
-// ============================================================
-// LOAD DATA
-// ============================================================
-
-async function loadSaleData() {
-  const [
-    productsResponse,
-    customersResponse,
-    accountsResponse
-  ] = await Promise.all([
-    fetch("/api/products"),
-    fetch("/api/customers"),
-    fetch("/api/accounts")
-  ]);
-
-  if (!productsResponse.ok) {
-    throw new Error("Products load failed");
-  }
-
-  if (!customersResponse.ok) {
-    throw new Error("Customers load failed");
-  }
-
-  if (!accountsResponse.ok) {
-    throw new Error("Accounts load failed");
-  }
-
-  saleProducts = await productsResponse.json();
-  saleCustomers = await customersResponse.json();
-  saleAccounts = await accountsResponse.json();
-
-  populateSaleProducts();
-  populateSaleCustomers();
-  populateSaleAccounts();
-}
-
-
-// ============================================================
-// PRODUCT DROPDOWN
-// ============================================================
-
-function populateSaleProducts() {
-  const select = document.getElementById("saleProduct");
-
-  if (!select) return;
-
-  select.innerHTML = `
-    <option value="">পণ্য নির্বাচন</option>
-
-    ${saleProducts.map(product => `
-      <option value="${product.id}">
-        ${escapeHtml(product.sku || "")}
-        — ${escapeHtml(product.name || "")}
-        — Stock: ${formatNumber(product.current_stock || 0)}
-      </option>
-    `).join("")}
-  `;
-}
-
-
-// ============================================================
-// CUSTOMER DROPDOWN
-// ============================================================
-
-function populateSaleCustomers() {
-  const select = document.getElementById("saleCustomer");
-
-  if (!select) return;
-
-  select.innerHTML = `
-    <option value="">Cash Customer</option>
-
-    ${saleCustomers.map(customer => `
-      <option value="${customer.id}">
-        ${escapeHtml(customer.name || "")}
-        ${customer.phone ? ` — ${escapeHtml(customer.phone)}` : ""}
-      </option>
-    `).join("")}
-  `;
-}
-
-
-// ============================================================
-// PAYMENT ACCOUNT
-// ============================================================
-
-function populateSaleAccounts() {
-  const select = document.getElementById("salePaymentAccount");
-
-  if (!select) return;
-
-  const allowedAccounts = saleAccounts.filter(account => {
-    return [
-      1000,
-      1010,
-      1020,
-      1030
-    ].includes(Number(account.code));
-  });
-
-  select.innerHTML = `
-    <option value="">Payment Account নির্বাচন</option>
-
-    ${allowedAccounts.map(account => `
-      <option value="${account.id}">
-        ${escapeHtml(account.name)}
-      </option>
-    `).join("")}
-  `;
-}
-
-
-// ============================================================
-// EVENTS
-// ============================================================
-
-function bindSaleEvents() {
-
-  const productSelect = document.getElementById("saleProduct");
-  const qtyInput = document.getElementById("saleQty");
-  const priceInput = document.getElementById("saleUnitPrice");
-
-  const addButton = document.getElementById("addSaleItemBtn");
-  const paidInput = document.getElementById("salePaidInput");
-  const saveButton = document.getElementById("saveSaleBtn");
-
-  productSelect?.addEventListener("change", () => {
-
-    const productId = Number(productSelect.value);
-
-    const product = saleProducts.find(
-      item => Number(item.id) === productId
+  document
+    .getElementById(
+      "new-expense-btn"
+    )
+    ?.addEventListener(
+      "click",
+      () =>
+        openExpenseModal()
     );
 
-    if (!product) {
-      priceInput.value = "";
-      updateSaleLineTotal();
-      return;
-    }
-
-    if (product.sale_price !== undefined) {
-      priceInput.value = product.sale_price;
-    }
-
-    updateSaleLineTotal();
-  });
-
-
-  qtyInput?.addEventListener(
-    "input",
-    updateSaleLineTotal
-  );
-
-
-  priceInput?.addEventListener(
-    "input",
-    updateSaleLineTotal
-  );
-
-
-  addButton?.addEventListener(
-    "click",
-    addSaleItem
-  );
-
-
-  paidInput?.addEventListener(
-    "input",
-    updateSaleTotals
-  );
-
-
-  saveButton?.addEventListener(
-    "click",
-    saveSale
-  );
+  await loadExpenses();
 }
 
+async function loadExpenses() {
 
-// ============================================================
-// LINE TOTAL
-// ============================================================
-
-function updateSaleLineTotal() {
-
-  const qty = Number(
-    document.getElementById("saleQty")?.value || 0
-  );
-
-  const price = Number(
-    document.getElementById("saleUnitPrice")?.value || 0
-  );
-
-  const total = qty * price;
-
-  const input = document.getElementById(
-    "saleLineTotal"
-  );
-
-  if (input) {
-    input.value = total.toFixed(2);
-  }
-}
-
-
-// ============================================================
-// ADD SALE ITEM
-// ============================================================
-
-function addSaleItem() {
-
-  const productId = Number(
-    document.getElementById("saleProduct").value
-  );
-
-  const qty = Number(
-    document.getElementById("saleQty").value
-  );
-
-  const unitPrice = Number(
-    document.getElementById("saleUnitPrice").value
-  );
-
-  if (!productId) {
-    showSaleMessage(
-      "পণ্য নির্বাচন করুন।",
-      "error"
+  const container =
+    document.getElementById(
+      "expense-content"
     );
-    return;
-  }
-
-  if (!qty || qty <= 0) {
-    showSaleMessage(
-      "সঠিক Quantity দিন।",
-      "error"
-    );
-    return;
-  }
-
-  if (unitPrice < 0) {
-    showSaleMessage(
-      "সঠিক Sale Price দিন।",
-      "error"
-    );
-    return;
-  }
-
-  const product = saleProducts.find(
-    item => Number(item.id) === productId
-  );
-
-  if (!product) {
-    showSaleMessage(
-      "পণ্য পাওয়া যায়নি।",
-      "error"
-    );
-    return;
-  }
-
-
-  const currentStock = Number(
-    product.current_stock || 0
-  );
-
-
-  const existingQty = saleItems
-    .filter(item => Number(item.product_id) === productId)
-    .reduce(
-      (sum, item) => sum + Number(item.quantity),
-      0
-    );
-
-
-  if (
-    existingQty + qty >
-    currentStock
-  ) {
-    showSaleMessage(
-      `স্টক যথেষ্ট নেই। Available: ${formatNumber(currentStock)}`,
-      "error"
-    );
-    return;
-  }
-
-
-  const existingItem = saleItems.find(
-    item => Number(item.product_id) === productId
-  );
-
-
-  if (existingItem) {
-
-    existingItem.quantity =
-      Number(existingItem.quantity) + qty;
-
-    existingItem.unit_price =
-      unitPrice;
-
-    existingItem.total =
-      existingItem.quantity * unitPrice;
-
-  } else {
-
-    saleItems.push({
-      product_id: productId,
-      product_name: product.name,
-      sku: product.sku,
-      quantity: qty,
-      unit_price: unitPrice,
-      total: qty * unitPrice
-    });
-
-  }
-
-
-  document.getElementById(
-    "saleProduct"
-  ).value = "";
-
-  document.getElementById(
-    "saleQty"
-  ).value = "";
-
-  document.getElementById(
-    "saleUnitPrice"
-  ).value = "";
-
-  document.getElementById(
-    "saleLineTotal"
-  ).value = "0";
-
-
-  renderSaleItems();
-  updateSaleTotals();
-
-  clearSaleMessage();
-}
-
-
-// ============================================================
-// RENDER ITEMS
-// ============================================================
-
-function renderSaleItems() {
-
-  const container = document.getElementById(
-    "saleItemsContainer"
-  );
 
   if (!container) return;
 
+  container.innerHTML =
+    loadingHtml(
+      "খরচের হিসাব লোড হচ্ছে..."
+    );
 
-  if (saleItems.length === 0) {
+  try {
+
+    const data =
+      await getJson(
+        "/api/expenses"
+      );
+
+    const expenses =
+      Array.isArray(data)
+        ? data
+        : data.expenses || [];
 
     container.innerHTML = `
+      <div class="table-wrapper">
+
+        <table class="data-table">
+
+          <thead>
+
+            <tr>
+              <th>তারিখ</th>
+              <th>ধরন</th>
+              <th>পরিমাণ</th>
+              <th>অ্যাকাউন্ট</th>
+              <th>নোট</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            ${
+              expenses.length
+                ? expenses.map(
+                    expense => `
+                      <tr>
+
+                        <td>
+                          ${escapeHtml(
+                            expense.expense_date ||
+                            expense.date ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            expense.category ||
+                            expense.expense_type ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            expense.amount ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            expense.account_name ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            expense.note ||
+                            ""
+                          )}
+                        </td>
+
+                      </tr>
+                    `
+                  ).join("")
+                : `
+                    <tr>
+
+                      <td
+                        colspan="5"
+                        class="text-center"
+                      >
+                        কোনো খরচ পাওয়া যায়নি।
+                      </td>
+
+                    </tr>
+                  `
+            }
+
+          </tbody>
+
+        </table>
+
+      </div>
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    container.innerHTML =
+      errorHtml(
+        error.message ||
+        "খরচ লোড করা যায়নি।"
+      );
+  }
+}
+
+async function openExpenseModal() {
+
+  const modal =
+    openModal(
+      "নতুন খরচ",
+
+      `
+        <form id="expense-form">
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                তারিখ *
+              </label>
+
+              <input
+                type="date"
+                name="expense_date"
+                required
+                value="${today()}"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                খরচের ধরন *
+              </label>
+
+              <select
+                name="expense_type"
+                required
+              >
+
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
+
+                <option value="SHOP_EXPENSE">
+                  দোকানের খরচ
+                </option>
+
+                <option value="FAMILY_EXPENSE">
+                  পারিবারিক খরচ
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পরিমাণ *
+              </label>
+
+              <input
+                type="number"
+                name="amount"
+                required
+                min="0.01"
+                step="0.01"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পেমেন্ট অ্যাকাউন্ট *
+              </label>
+
+              <select
+                name="account_id"
+                required
+                id="expense-account"
+              >
+
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group form-group-full">
+
+              <label>
+                নোট
+              </label>
+
+              <textarea
+                name="note"
+                rows="3"
+              ></textarea>
+
+            </div>
+
+          </div>
+
+          <div class="modal-footer">
+
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-modal-cancel
+            >
+              বাতিল
+            </button>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              খরচ সংরক্ষণ
+            </button>
+
+          </div>
+
+        </form>
+      `,
+      {
+        large: false
+      }
+    );
+
+  await loadExpenseAccounts(
+    modal
+  );
+
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
+
+  modal
+    .querySelector(
+      "#expense-form"
+    )
+    ?.addEventListener(
+      "submit",
+      submitExpense
+    );
+}
+
+async function loadExpenseAccounts(
+  modal
+) {
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/accounts"
+      );
+
+    const accounts =
+      Array.isArray(data)
+        ? data
+        : data.accounts || [];
+
+    const select =
+      modal.querySelector(
+        "#expense-account"
+      );
+
+    if (!select) return;
+
+    select.innerHTML = `
+      <option value="">
+        — নির্বাচন করুন —
+      </option>
+
+      ${accounts
+        .filter(
+          account =>
+            [
+              1000,
+              1010,
+              1020,
+              1030,
+              1040,
+              1050,
+              1060,
+              1070
+            ].includes(
+              Number(account.id)
+            )
+        )
+        .map(
+          account => `
+            <option value="${account.id}">
+              ${escapeHtml(
+                account.name
+              )}
+            </option>
+          `
+        ).join("")}
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "অ্যাকাউন্ট লোড করা যায়নি।"
+    );
+  }
+}
+
+async function submitExpense(
+  event
+) {
+
+  event.preventDefault();
+
+  const form =
+    event.currentTarget;
+
+  const formData =
+    new FormData(form);
+
+  const payload = {
+
+    expense_date:
+      formData.get(
+        "expense_date"
+      ) || today(),
+
+    expense_type:
+      String(
+        formData.get(
+          "expense_type"
+        ) || ""
+      ),
+
+    amount:
+      Number(
+        formData.get(
+          "amount"
+        ) || 0
+      ),
+
+    account_id:
+      Number(
+        formData.get(
+          "account_id"
+        )
+      ),
+
+    note:
+      String(
+        formData.get(
+          "note"
+        ) || ""
+      ).trim()
+  };
+
+  if (!payload.expense_type) {
+
+    showError(
+      "খরচের ধরন নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  if (
+    payload.amount <= 0
+  ) {
+
+    showError(
+      "খরচের পরিমাণ ০-এর বেশি হতে হবে।"
+    );
+
+    return;
+  }
+
+  if (
+    !payload.account_id
+  ) {
+
+    showError(
+      "পেমেন্ট অ্যাকাউন্ট নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  try {
+
+    setLoading(true);
+
+    await postJson(
+      "/api/transactions/expense",
+      payload
+    );
+
+    showSuccess(
+      "খরচ সফলভাবে সংরক্ষণ হয়েছে।"
+    );
+
+    closeModal();
+
+    await loadExpenses();
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "খরচ সংরক্ষণ করা যায়নি।"
+    );
+
+  } finally {
+
+    setLoading(false);
+  }
+}
+
+/* =========================================================
+   OTHER INCOME
+   ========================================================= */
+
+async function renderOtherIncome() {
+
+  if (!app) return;
+
+  app.innerHTML = `
+    <section class="page income-page">
+
+      <div class="page-toolbar">
+
+        <div>
+
+          <h2>অন্যান্য আয়</h2>
+
+          <p class="muted">
+            বিক্রয় ছাড়া অন্যান্য আয়
+          </p>
+
+        </div>
+
+        <div class="toolbar-actions">
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="new-income-btn"
+          >
+            + নতুন আয়
+          </button>
+
+        </div>
+
+      </div>
+
+      <div id="income-content">
+        ${loadingHtml(
+          "অন্যান্য আয় লোড হচ্ছে..."
+        )}
+      </div>
+
+    </section>
+  `;
+
+  document
+    .getElementById(
+      "new-income-btn"
+    )
+    ?.addEventListener(
+      "click",
+      () =>
+        openOtherIncomeModal()
+    );
+
+  await loadOtherIncome();
+}
+
+async function loadOtherIncome() {
+
+  const container =
+    document.getElementById(
+      "income-content"
+    );
+
+  if (!container) return;
+
+  container.innerHTML =
+    loadingHtml(
+      "অন্যান্য আয় লোড হচ্ছে..."
+    );
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/other-income"
+      );
+
+    const incomes =
+      Array.isArray(data)
+        ? data
+        : data.incomes || [];
+
+    container.innerHTML = `
+
+      <div class="table-wrapper">
+
+        <table class="data-table">
+
+          <thead>
+
+            <tr>
+              <th>তারিখ</th>
+              <th>পরিমাণ</th>
+              <th>অ্যাকাউন্ট</th>
+              <th>নোট</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            ${
+              incomes.length
+                ? incomes.map(
+                    income => `
+                      <tr>
+
+                        <td>
+                          ${escapeHtml(
+                            income.income_date ||
+                            income.date ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            income.amount ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            income.account_name ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            income.note ||
+                            ""
+                          )}
+                        </td>
+
+                      </tr>
+                    `
+                  ).join("")
+                : `
+                    <tr>
+
+                      <td
+                        colspan="4"
+                        class="text-center"
+                      >
+                        কোনো অন্যান্য আয় পাওয়া যায়নি।
+                      </td>
+
+                    </tr>
+                  `
+            }
+
+          </tbody>
+
+        </table>
+
+      </div>
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    container.innerHTML =
+      errorHtml(
+        error.message ||
+        "অন্যান্য আয় লোড করা যায়নি।"
+      );
+  }
+}
+
+async function openOtherIncomeModal() {
+
+  const modal =
+    openModal(
+      "নতুন অন্যান্য আয়",
+
+      `
+        <form id="other-income-form">
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                তারিখ *
+              </label>
+
+              <input
+                type="date"
+                name="income_date"
+                required
+                value="${today()}"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পরিমাণ *
+              </label>
+
+              <input
+                type="number"
+                name="amount"
+                required
+                min="0.01"
+                step="0.01"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                জমা অ্যাকাউন্ট *
+              </label>
+
+              <select
+                name="account_id"
+                id="income-account"
+                required
+              >
+
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group form-group-full">
+
+              <label>
+                নোট
+              </label>
+
+              <textarea
+                name="note"
+                rows="3"
+              ></textarea>
+
+            </div>
+
+          </div>
+
+          <div class="modal-footer">
+
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-modal-cancel
+            >
+              বাতিল
+            </button>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              আয় সংরক্ষণ
+            </button>
+
+          </div>
+
+        </form>
+      `
+    );
+
+  await loadIncomeAccounts(
+    modal
+  );
+
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
+
+  modal
+    .querySelector(
+      "#other-income-form"
+    )
+    ?.addEventListener(
+      "submit",
+      submitOtherIncome
+    );
+}
+
+async function loadIncomeAccounts(
+  modal
+) {
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/accounts"
+      );
+
+    const accounts =
+      Array.isArray(data)
+        ? data
+        : data.accounts || [];
+
+    const select =
+      modal.querySelector(
+        "#income-account"
+      );
+
+    if (!select) return;
+
+    select.innerHTML = `
+      <option value="">
+        — নির্বাচন করুন —
+      </option>
+
+      ${accounts
+        .filter(
+          account =>
+            [
+              1000,
+              1010,
+              1020,
+              1030,
+              1040,
+              1050,
+              1060,
+              1070
+            ].includes(
+              Number(account.id)
+            )
+        )
+        .map(
+          account => `
+            <option value="${account.id}">
+              ${escapeHtml(
+                account.name
+              )}
+            </option>
+          `
+        ).join("")}
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "অ্যাকাউন্ট লোড করা যায়নি।"
+    );
+  }
+}
+
+async function submitOtherIncome(
+  event
+) {
+
+  event.preventDefault();
+
+  const form =
+    event.currentTarget;
+
+  const formData =
+    new FormData(form);
+
+  const payload = {
+
+    income_date:
+      formData.get(
+        "income_date"
+      ) || today(),
+
+    amount:
+      Number(
+        formData.get(
+          "amount"
+        ) || 0
+      ),
+
+    account_id:
+      Number(
+        formData.get(
+          "account_id"
+        )
+      ),
+
+    note:
+      String(
+        formData.get(
+          "note"
+        ) || ""
+      ).trim()
+  };
+
+  if (
+    payload.amount <= 0
+  ) {
+
+    showError(
+      "আয়ের পরিমাণ ০-এর বেশি হতে হবে।"
+    );
+
+    return;
+  }
+
+  if (
+    !payload.account_id
+  ) {
+
+    showError(
+      "আয় জমার অ্যাকাউন্ট নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  try {
+
+    setLoading(true);
+
+    await postJson(
+      "/api/transactions/other-income",
+      payload
+    );
+
+    showSuccess(
+      "অন্যান্য আয় সংরক্ষণ হয়েছে।"
+    );
+
+    closeModal();
+
+    await loadOtherIncome();
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "অন্যান্য আয় সংরক্ষণ করা যায়নি।"
+    );
+
+  } finally {
+
+    setLoading(false);
+  }
+}
+
+/* =========================================================
+   ACCOUNT TRANSFER
+   ========================================================= */
+
+async function renderAccountTransfer() {
+
+  if (!app) return;
+
+  app.innerHTML = `
+    <section class="page transfer-page">
+
+      <div class="page-toolbar">
+
+        <div>
+
+          <h2>অ্যাকাউন্ট ট্রান্সফার</h2>
+
+          <p class="muted">
+            এক অ্যাকাউন্ট থেকে অন্য অ্যাকাউন্টে টাকা স্থানান্তর
+          </p>
+
+        </div>
+
+        <div class="toolbar-actions">
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            id="new-transfer-btn"
+          >
+            + নতুন ট্রান্সফার
+          </button>
+
+        </div>
+
+      </div>
+
+      <div id="transfer-content">
+        ${loadingHtml(
+          "ট্রান্সফার লোড হচ্ছে..."
+        )}
+      </div>
+
+    </section>
+  `;
+
+  document
+    .getElementById(
+      "new-transfer-btn"
+    )
+    ?.addEventListener(
+      "click",
+      () =>
+        openAccountTransferModal()
+    );
+
+  await loadAccountTransfers();
+}
+
+async function loadAccountTransfers() {
+
+  const container =
+    document.getElementById(
+      "transfer-content"
+    );
+
+  if (!container) return;
+
+  container.innerHTML =
+    loadingHtml(
+      "ট্রান্সফার লোড হচ্ছে..."
+    );
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/account-transfers"
+      );
+
+    const transfers =
+      Array.isArray(data)
+        ? data
+        : data.transfers || [];
+
+    container.innerHTML = `
+
+      <div class="table-wrapper">
+
+        <table class="data-table">
+
+          <thead>
+
+            <tr>
+              <th>তারিখ</th>
+              <th>From</th>
+              <th>To</th>
+              <th>পরিমাণ</th>
+              <th>নোট</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            ${
+              transfers.length
+                ? transfers.map(
+                    transfer => `
+                      <tr>
+
+                        <td>
+                          ${escapeHtml(
+                            transfer.transfer_date ||
+                            transfer.date ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            transfer.from_account_name ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            transfer.to_account_name ||
+                            ""
+                          )}
+                        </td>
+
+                        <td>
+                          ৳ ${formatMoney(
+                            transfer.amount ||
+                            0
+                          )}
+                        </td>
+
+                        <td>
+                          ${escapeHtml(
+                            transfer.note ||
+                            ""
+                          )}
+                        </td>
+
+                      </tr>
+                    `
+                  ).join("")
+                : `
+                    <tr>
+
+                      <td
+                        colspan="5"
+                        class="text-center"
+                      >
+                        কোনো ট্রান্সফার পাওয়া যায়নি।
+                      </td>
+
+                    </tr>
+                  `
+            }
+
+          </tbody>
+
+        </table>
+
+      </div>
+    `;
+
+  } catch (error) {
+
+    console.error(error);
+
+    container.innerHTML =
+      errorHtml(
+        error.message ||
+        "ট্রান্সফার লোড করা যায়নি।"
+      );
+  }
+}
+
+async function openAccountTransferModal() {
+
+  const modal =
+    openModal(
+      "অ্যাকাউন্ট ট্রান্সফার",
+
+      `
+        <form id="account-transfer-form">
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                তারিখ *
+              </label>
+
+              <input
+                type="date"
+                name="transfer_date"
+                required
+                value="${today()}"
+              >
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                From Account *
+              </label>
+
+              <select
+                name="from_account_id"
+                id="transfer-from"
+                required
+              >
+
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                To Account *
+              </label>
+
+              <select
+                name="to_account_id"
+                id="transfer-to"
+                required
+              >
+
+                <option value="">
+                  — নির্বাচন করুন —
+                </option>
+
+              </select>
+
+            </div>
+
+            <div class="form-group">
+
+              <label>
+                পরিমাণ *
+              </label>
+
+              <input
+                type="number"
+                name="amount"
+                required
+                min="0.01"
+                step="0.01"
+              >
+
+            </div>
+
+            <div class="form-group form-group-full">
+
+              <label>
+                নোট
+              </label>
+
+              <textarea
+                name="note"
+                rows="3"
+              ></textarea>
+
+            </div>
+
+          </div>
+
+          <div class="modal-footer">
+
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-modal-cancel
+            >
+              বাতিল
+            </button>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+            >
+              ট্রান্সফার সংরক্ষণ
+            </button>
+
+          </div>
+
+        </form>
+      `,
+      {
+        large: false
+      }
+    );
+
+  await loadTransferAccounts(
+    modal
+  );
+
+  modal
+    .querySelector(
+      "[data-modal-cancel]"
+    )
+    ?.addEventListener(
+      "click",
+      closeModal
+    );
+
+  modal
+    .querySelector(
+      "#account-transfer-form"
+    )
+    ?.addEventListener(
+      "submit",
+      submitAccountTransfer
+    );
+}
+
+async function loadTransferAccounts(
+  modal
+) {
+
+  try {
+
+    const data =
+      await getJson(
+        "/api/accounts"
+      );
+
+    const accounts =
+      Array.isArray(data)
+        ? data
+        : data.accounts || [];
+
+    const options = `
+      <option value="">
+        — নির্বাচন করুন —
+      </option>
+
+      ${accounts.map(
+        account => `
+          <option value="${account.id}">
+            ${escapeHtml(
+              account.name
+            )}
+          </option>
+        `
+      ).join("")}
+    `;
+
+    const fromSelect =
+      modal.querySelector(
+        "#transfer-from"
+      );
+
+    const toSelect =
+      modal.querySelector(
+        "#transfer-to"
+      );
+
+    if (fromSelect) {
+      fromSelect.innerHTML =
+        options;
+    }
+
+    if (toSelect) {
+      toSelect.innerHTML =
+        options;
+    }
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "অ্যাকাউন্ট লোড করা যায়নি।"
+    );
+  }
+}
+
+async function submitAccountTransfer(
+  event
+) {
+
+  event.preventDefault();
+
+  const form =
+    event.currentTarget;
+
+  const formData =
+    new FormData(form);
+
+  const payload = {
+
+    transfer_date:
+      formData.get(
+        "transfer_date"
+      ) || today(),
+
+    from_account_id:
+      Number(
+        formData.get(
+          "from_account_id"
+        )
+      ),
+
+    to_account_id:
+      Number(
+        formData.get(
+          "to_account_id"
+        )
+      ),
+
+    amount:
+      Number(
+        formData.get(
+          "amount"
+        ) || 0
+      ),
+
+    note:
+      String(
+        formData.get(
+          "note"
+        ) || ""
+      ).trim()
+  };
+
+  if (
+    !payload.from_account_id ||
+    !payload.to_account_id
+  ) {
+
+    showError(
+      "দুইটি অ্যাকাউন্ট নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+  if (
+    payload.from_account_id ===
+    payload.to_account_id
+  ) {
+
+    showError(
+      "From ও To একই অ্যাকাউন্ট হতে পারবে না।"
+    );
+
+    return;
+  }
+
+  if (
+    payload.amount <= 0
+  ) {
+
+    showError(
+      "ট্রান্সফারের পরিমাণ ০-এর বেশি হতে হবে।"
+    );
+
+    return;
+  }
+
+  try {
+
+    setLoading(true);
+
+    await postJson(
+      "/api/transactions/account-transfer",
+      payload
+    );
+
+    showSuccess(
+      "অ্যাকাউন্ট ট্রান্সফার সফল হয়েছে।"
+    );
+
+    closeModal();
+
+    await loadAccountTransfers();
+
+  } catch (error) {
+
+    console.error(error);
+
+    showError(
+      error.message ||
+      "অ্যাকাউন্ট ট্রান্সফার করা যায়নি।"
+    );
+
+  } finally {
+
+    setLoading(false);
+  }
+}
+
+/* =========================================================
+   INITIALIZATION
+   ========================================================= */
+
+async function initializeApp() {
+
+  try {
+
+    updatePageMeta(
+      state.currentPage
+    );
+
+    await navigate(
+      state.currentPage
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Application initialization error:",
+      error
+    );
+
+    if (app) {
+
+      app.innerHTML =
+        errorHtml(
+          error.message ||
+          "অ্যাপ চালু করতে সমস্যা হয়েছে।"
+        );
+    }
+  }
+}
+
+if (
+  document.readyState ===
+  "loading"
+) {
+
+  document.addEventListener(
+    "DOMContentLoaded",
+    initializeApp
+  );
+
+} else {
+
+  initializeApp();
+}
       <div class="empty-state">
         এখনো কোনো পণ্য যোগ করা হয়নি।
       </div>
@@ -3443,17 +7989,6 @@ function formatNumber(value) {
 }
 
 
-function escapeHtml(value) {
-
-  return String(
-    value ?? ""
-  )
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
 // ============================================================
 // CUSTOMER DUE MODULE
 // ============================================================
@@ -3606,7 +8141,7 @@ async function renderCustomerDue() {
           <input
             id="collectionNote"
             type="text"
-            placeholder="Collection note"
+            placeholder="নোট"
           >
 
         </div>
@@ -3639,9 +8174,11 @@ async function renderCustomerDue() {
 
 
       <div id="customerLedger">
+
         <div class="empty-state">
-          Customer নির্বাচন করুন।
+          Ledger loading...
         </div>
+
       </div>
 
     </section>
@@ -3650,6 +8187,8 @@ async function renderCustomerDue() {
 
   await loadDueData();
 
+  await loadCollectionAccounts();
+
   bindCustomerDueEvents();
 
   renderDueCustomers();
@@ -3657,54 +8196,79 @@ async function renderCustomerDue() {
 
 
 // ============================================================
-// LOAD DATA
+// LOAD DUE DATA
 // ============================================================
 
 async function loadDueData() {
 
-  const [
-    customersResponse,
-    accountsResponse
-  ] = await Promise.all([
+  try {
 
-    fetch("/api/customers"),
-
-    fetch("/api/accounts")
-
-  ]);
+    const response =
+      await fetch(
+        "/api/customers/due"
+      );
 
 
-  if (!customersResponse.ok) {
-    throw new Error(
-      "Customer data load failed"
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Customer due load failed"
+      );
+
+    }
+
+
+    dueCustomers =
+      Array.isArray(result)
+        ? result
+        : (
+          result.customers ||
+          []
+        );
+
+
+  } catch (error) {
+
+    console.error(
+      "Due data error:",
+      error
     );
+
+    dueCustomers = [];
+
   }
-
-
-  if (!accountsResponse.ok) {
-    throw new Error(
-      "Account data load failed"
-    );
-  }
-
-
-  dueCustomers =
-    await customersResponse.json();
-
-
-  dueAccounts =
-    await accountsResponse.json();
-
-
-  populateCollectionAccounts();
 }
 
 
 // ============================================================
-// COLLECTION ACCOUNTS
+// LOAD COLLECTION ACCOUNTS
 // ============================================================
 
-function populateCollectionAccounts() {
+async function loadCollectionAccounts() {
+
+  const response =
+    await fetch(
+      "/api/accounts"
+    );
+
+
+  if (!response.ok) {
+
+    throw new Error(
+      "Accounts load failed"
+    );
+
+  }
+
+
+  dueAccounts =
+    await response.json();
+
 
   const select =
     document.getElementById(
@@ -3715,19 +8279,18 @@ function populateCollectionAccounts() {
   if (!select) return;
 
 
-  const accounts =
-    dueAccounts.filter(account => {
-
-      return [
-        1000,
-        1010,
-        1020,
-        1030
-      ].includes(
-        Number(account.code)
-      );
-
-    });
+  const allowed =
+    dueAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
 
 
   select.innerHTML = `
@@ -3735,50 +8298,44 @@ function populateCollectionAccounts() {
       Account নির্বাচন
     </option>
 
-    ${accounts.map(account => `
-
+    ${allowed.map(account => `
       <option value="${account.id}">
         ${escapeHtml(account.name)}
       </option>
-
     `).join("")}
   `;
 }
 
 
 // ============================================================
-// EVENTS
+// CUSTOMER DUE EVENTS
 // ============================================================
 
 function bindCustomerDueEvents() {
 
-  const search =
-    document.getElementById(
+  document
+    .getElementById(
       "dueCustomerSearch"
+    )
+    ?.addEventListener(
+      "input",
+      renderDueCustomers
     );
 
 
-  search?.addEventListener(
-    "input",
-    renderDueCustomers
-  );
-
-
-  const saveButton =
-    document.getElementById(
+  document
+    .getElementById(
       "saveCollectionBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveCustomerCollection
     );
-
-
-  saveButton?.addEventListener(
-    "click",
-    saveCustomerCollection
-  );
 }
 
 
 // ============================================================
-// CUSTOMER LIST
+// RENDER DUE CUSTOMERS
 // ============================================================
 
 function renderDueCustomers() {
@@ -3792,7 +8349,7 @@ function renderDueCustomers() {
   if (!container) return;
 
 
-  const searchValue =
+  const search =
     (
       document.getElementById(
         "dueCustomerSearch"
@@ -3803,37 +8360,38 @@ function renderDueCustomers() {
 
 
   const filtered =
-    dueCustomers.filter(customer => {
+    dueCustomers.filter(
+      customer => {
 
-      const name =
-        String(
-          customer.name || ""
-        ).toLowerCase();
+        const name =
+          String(
+            customer.name || ""
+          )
+            .toLowerCase();
 
-      const phone =
-        String(
-          customer.phone || ""
-        ).toLowerCase();
 
-      const due =
-        Number(
-          customer.current_due || 0
+        const phone =
+          String(
+            customer.phone || ""
+          )
+            .toLowerCase();
+
+
+        return (
+          !search ||
+          name.includes(search) ||
+          phone.includes(search)
         );
 
-
-      return (
-        name.includes(searchValue) ||
-        phone.includes(searchValue)
-      ) && due > 0;
-
-    });
+      }
+    );
 
 
   if (!filtered.length) {
 
     container.innerHTML = `
       <div class="empty-state">
-        কোনো বাকি Customer পাওয়া যায়নি।
+        কোনো customer পাওয়া যায়নি।
       </div>
     `;
 
@@ -3848,6 +8406,7 @@ function renderDueCustomers() {
       <table>
 
         <thead>
+
           <tr>
             <th>#</th>
             <th>Customer</th>
@@ -3855,6 +8414,7 @@ function renderDueCustomers() {
             <th>Current Due</th>
             <th>Action</th>
           </tr>
+
         </thead>
 
         <tbody>
@@ -4440,6 +9000,7 @@ function showCollectionMessage(
   `;
 }
 
+
 // ============================================================
 // SUPPLIER DUE MODULE
 // ============================================================
@@ -4490,6 +9051,2375 @@ async function renderSupplierDue() {
 
       <div id="supplierDueList">
         <div class="empty-state">
+          Loading...
+        </div>
+      </div>
+
+    </section>
+
+
+    <section
+      id="supplierDueDetails"
+      class="card"
+      style="display:none;"
+    >
+
+      <div class="section-title">
+        <h2 id="selectedSupplierName">
+          Supplier
+        </h2>
+      </div>
+
+
+      <div class="summary-grid">
+
+        <div class="summary-card">
+          <span>Total Purchase Due</span>
+          <strong id="supplierTotalDue">
+            ৳0.00
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span>Total Payment</span>
+          <strong id="supplierPaymentTotal">
+            ৳0.00
+          </strong>
+        </div>
+
+        <div class="summary-card">
+          <span>Current Payable</span>
+          <strong id="supplierCurrentDue">
+            ৳0.00
+          </strong>
+        </div>
+
+      </div>
+
+
+      <hr>
+
+
+      <div class="section-title">
+        <h2>Supplier Payment</h2>
+      </div>
+
+
+      <div class="form-grid">
+
+        <div class="form-group">
+
+          <label>Payment Amount</label>
+
+          <input
+            id="supplierPaymentAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Payment Account</label>
+
+          <select id="supplierPaymentAccount">
+
+            <option value="">
+              Account নির্বাচন
+            </option>
+
+          </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Date</label>
+
+          <input
+            id="supplierPaymentDate"
+            type="date"
+            value="${todayDate()}"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Note</label>
+
+          <input
+            id="supplierPaymentNote"
+            type="text"
+            placeholder="নোট"
+          >
+
+        </div>
+
+      </div>
+
+
+      <div class="form-actions">
+
+        <button
+          id="saveSupplierPaymentBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          Supplier Payment সংরক্ষণ
+        </button>
+
+      </div>
+
+
+      <div id="supplierPaymentMessage"></div>
+
+
+      <hr>
+
+
+      <div class="section-title">
+        <h2>Supplier Ledger</h2>
+      </div>
+
+
+      <div id="supplierLedger">
+
+        <div class="empty-state">
+          Ledger loading...
+        </div>
+
+      </div>
+
+    </section>
+  `;
+
+
+  await loadSupplierDueData();
+
+  await loadSupplierPaymentAccounts();
+
+  bindSupplierDueEvents();
+
+  renderSupplierDueList();
+}
+
+
+// ============================================================
+// LOAD SUPPLIER DUE DATA
+// ============================================================
+
+async function loadSupplierDueData() {
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/suppliers/due"
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Supplier due load failed"
+      );
+
+    }
+
+
+    supplierDueList =
+      Array.isArray(result)
+        ? result
+        : (
+          result.suppliers ||
+          []
+        );
+
+
+  } catch (error) {
+
+    console.error(
+      "Supplier due data error:",
+      error
+    );
+
+    supplierDueList = [];
+
+  }
+}
+
+
+// ============================================================
+// LOAD SUPPLIER PAYMENT ACCOUNTS
+// ============================================================
+
+async function loadSupplierPaymentAccounts() {
+
+  const response =
+    await fetch(
+      "/api/accounts"
+    );
+
+
+  if (!response.ok) {
+
+    throw new Error(
+      "Accounts load failed"
+    );
+
+  }
+
+
+  supplierDueAccounts =
+    await response.json();
+
+
+  const select =
+    document.getElementById(
+      "supplierPaymentAccount"
+    );
+
+
+  if (!select) return;
+
+
+  const allowed =
+    supplierDueAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${allowed.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+// ============================================================
+// SUPPLIER DUE EVENTS
+// ============================================================
+
+function bindSupplierDueEvents() {
+
+  document
+    .getElementById(
+      "supplierDueSearch"
+    )
+    ?.addEventListener(
+      "input",
+      renderSupplierDueList
+    );
+
+
+  document
+    .getElementById(
+      "saveSupplierPaymentBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveSupplierPayment
+    );
+}
+
+
+// ============================================================
+// RENDER SUPPLIER DUE LIST
+// ============================================================
+
+function renderSupplierDueList() {
+
+  const container =
+    document.getElementById(
+      "supplierDueList"
+    );
+
+
+  if (!container) return;
+
+
+  const search =
+    (
+      document.getElementById(
+        "supplierDueSearch"
+      )?.value || ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+  const filtered =
+    supplierDueList.filter(
+      supplier => {
+
+        const name =
+          String(
+            supplier.name || ""
+          )
+            .toLowerCase();
+
+
+        const phone =
+          String(
+            supplier.phone || ""
+          )
+            .toLowerCase();
+
+
+        return (
+          !search ||
+          name.includes(search) ||
+          phone.includes(search)
+        );
+
+      }
+    );
+
+
+  if (!filtered.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো supplier পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>#</th>
+            <th>Supplier</th>
+            <th>Phone</th>
+            <th>Current Payable</th>
+            <th>Action</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${filtered.map((supplier, index) => `
+
+            <tr>
+
+              <td>
+                ${index + 1}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  supplier.name
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  supplier.phone || ""
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  supplier.current_due
+                )}
+              </td>
+
+              <td>
+
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm"
+                  data-supplier-due="${supplier.id}"
+                >
+                  View
+                </button>
+
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+
+
+  container
+    .querySelectorAll(
+      "[data-supplier-due]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        () => {
+
+          const supplierId =
+            Number(
+              button.dataset.supplierDue
+            );
+
+          selectSupplierDue(
+            supplierId
+          );
+
+        }
+      );
+
+    });
+}
+
+
+// ============================================================
+// SELECT SUPPLIER
+// ============================================================
+
+async function selectSupplierDue(
+  supplierId
+) {
+
+  selectedSupplierDue =
+    supplierDueList.find(
+      supplier =>
+        Number(supplier.id) ===
+        Number(supplierId)
+    );
+
+
+  if (!selectedSupplierDue) {
+    return;
+  }
+
+
+  const details =
+    document.getElementById(
+      "supplierDueDetails"
+    );
+
+
+  if (details) {
+
+    details.style.display =
+      "block";
+
+  }
+
+
+  document.getElementById(
+    "selectedSupplierName"
+  ).textContent =
+    selectedSupplierDue.name;
+
+
+  document.getElementById(
+    "supplierCurrentDue"
+  ).textContent =
+    `৳${formatMoney(
+      selectedSupplierDue.current_due
+    )}`;
+
+
+  await loadSupplierLedger(
+    supplierId
+  );
+}
+
+
+// ============================================================
+// SUPPLIER LEDGER
+// ============================================================
+
+async function loadSupplierLedger(
+  supplierId
+) {
+
+  const container =
+    document.getElementById(
+      "supplierLedger"
+    );
+
+
+  if (!container) return;
+
+
+  container.innerHTML = `
+    <div class="empty-state">
+      Ledger loading...
+    </div>
+  `;
+
+
+  try {
+
+    const response =
+      await fetch(
+        `/api/suppliers/${supplierId}/ledger`
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Supplier ledger load failed"
+      );
+
+    }
+
+
+    renderSupplierLedger(
+      result
+    );
+
+
+  } catch (error) {
+
+    console.error(
+      "Supplier ledger error:",
+      error
+    );
+
+
+    container.innerHTML = `
+      <div class="alert error">
+        ${escapeHtml(
+          error.message
+        )}
+      </div>
+    `;
+
+  }
+}
+
+
+// ============================================================
+// RENDER SUPPLIER LEDGER
+// ============================================================
+
+function renderSupplierLedger(
+  result
+) {
+
+  const container =
+    document.getElementById(
+      "supplierLedger"
+    );
+
+
+  if (!container) return;
+
+
+  const entries =
+    result.entries || [];
+
+
+  const totalDue =
+    Number(
+      result.total_due || 0
+    );
+
+
+  const totalPayment =
+    Number(
+      result.total_payment || 0
+    );
+
+
+  document.getElementById(
+    "supplierTotalDue"
+  ).textContent =
+    `৳${formatMoney(
+      totalDue
+    )}`;
+
+
+  document.getElementById(
+    "supplierPaymentTotal"
+  ).textContent =
+    `৳${formatMoney(
+      totalPayment
+    )}`;
+
+
+  document.getElementById(
+    "supplierCurrentDue"
+  ).textContent =
+    `৳${formatMoney(
+      result.current_due || 0
+    )}`;
+
+
+  if (!entries.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো ledger পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Reference</th>
+            <th>Debit</th>
+            <th>Credit</th>
+            <th>Balance</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${entries.map(entry => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  entry.date || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  entry.type || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  entry.reference || ""
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.debit || 0
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.credit || 0
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.balance || 0
+                )}
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+
+
+// ============================================================
+// SAVE SUPPLIER PAYMENT
+// ============================================================
+
+async function saveSupplierPayment() {
+
+  if (!selectedSupplierDue) {
+
+    showSupplierPaymentMessage(
+      "প্রথমে Supplier নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const amount =
+    Number(
+      document.getElementById(
+        "supplierPaymentAmount"
+      ).value || 0
+    );
+
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "supplierPaymentAccount"
+      ).value || 0
+    );
+
+
+  const date =
+    document.getElementById(
+      "supplierPaymentDate"
+    ).value;
+
+
+  const note =
+    document.getElementById(
+      "supplierPaymentNote"
+    ).value.trim();
+
+
+  const currentDue =
+    Number(
+      selectedSupplierDue.current_due || 0
+    );
+
+
+  if (amount <= 0) {
+
+    showSupplierPaymentMessage(
+      "Payment Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (amount > currentDue) {
+
+    showSupplierPaymentMessage(
+      "Payment Amount বর্তমান payable-এর চেয়ে বেশি হতে পারবে না।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showSupplierPaymentMessage(
+      "Payment Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveSupplierPaymentBtn"
+    );
+
+
+  const payload = {
+
+    supplier_id:
+      Number(
+        selectedSupplierDue.id
+      ),
+
+    amount,
+
+    payment_account_id:
+      accountId,
+
+    payment_date:
+      date,
+
+    note
+
+  };
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/supplier-payment",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body:
+            JSON.stringify(payload)
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Supplier payment save failed"
+      );
+
+    }
+
+
+    showSupplierPaymentMessage(
+      "Supplier payment সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "supplierPaymentAmount"
+    ).value = "";
+
+
+    document.getElementById(
+      "supplierPaymentNote"
+    ).value = "";
+
+
+    await loadSupplierDueData();
+
+
+    selectedSupplierDue =
+      supplierDueList.find(
+        supplier =>
+          Number(supplier.id) ===
+          Number(
+            selectedSupplierDue.id
+          )
+      );
+
+
+    await selectSupplierDue(
+      selectedSupplierDue.id
+    );
+
+
+    renderSupplierDueList();
+
+
+  } catch (error) {
+
+    console.error(
+      "Supplier payment error:",
+      error
+    );
+
+
+    showSupplierPaymentMessage(
+      error.message ||
+      "Supplier payment সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "Supplier Payment সংরক্ষণ";
+
+  }
+}
+
+
+// ============================================================
+// MESSAGE
+// ============================================================
+
+function showSupplierPaymentMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "supplierPaymentMessage"
+    );
+
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+
+// ============================================================
+// EXPENSE MODULE
+// ============================================================
+
+let expenseAccounts = [];
+
+async function renderExpense() {
+
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>খরচ</h1>
+        <p>Shop Expense / Family Expense</p>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>খরচের ধরন</label>
+
+          <select id="expenseType">
+            <option value="SHOP">দোকানের খরচ</option>
+            <option value="FAMILY">পারিবারিক খরচ</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Amount</label>
+
+          <input
+            id="expenseAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Payment Account</label>
+
+          <select id="expenseAccount">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Date</label>
+
+          <input
+            id="expenseDate"
+            type="date"
+            value="${todayDate()}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Category</label>
+
+          <input
+            id="expenseCategory"
+            type="text"
+            placeholder="যেমন: বিদ্যুৎ / ভাড়া / খাবার"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Note</label>
+
+          <input
+            id="expenseNote"
+            type="text"
+            placeholder="নোট"
+          >
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+
+        <button
+          id="saveExpenseBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          খরচ সংরক্ষণ
+        </button>
+
+      </div>
+
+      <div id="expenseMessage"></div>
+
+    </section>
+  `;
+
+  await loadExpenseAccounts();
+
+  bindExpenseEvents();
+}
+
+
+async function loadExpenseAccounts() {
+
+  const response =
+    await fetch("/api/accounts");
+
+  if (!response.ok) {
+    throw new Error(
+      "Accounts load failed"
+    );
+  }
+
+  expenseAccounts =
+    await response.json();
+
+  populateExpenseAccounts();
+}
+
+
+function populateExpenseAccounts() {
+
+  const select =
+    document.getElementById(
+      "expenseAccount"
+    );
+
+  if (!select) return;
+
+  const accounts =
+    expenseAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+function bindExpenseEvents() {
+
+  document
+    .getElementById("saveExpenseBtn")
+    ?.addEventListener(
+      "click",
+      saveExpense
+    );
+}
+
+
+async function saveExpense() {
+
+  const type =
+    document.getElementById(
+      "expenseType"
+    ).value;
+
+  const amount =
+    Number(
+      document.getElementById(
+        "expenseAmount"
+      ).value || 0
+    );
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "expenseAccount"
+      ).value || 0
+    );
+
+  const date =
+    document.getElementById(
+      "expenseDate"
+    ).value;
+
+  const category =
+    document.getElementById(
+      "expenseCategory"
+    ).value.trim();
+
+  const note =
+    document.getElementById(
+      "expenseNote"
+    ).value.trim();
+
+
+  if (amount <= 0) {
+
+    showExpenseMessage(
+      "সঠিক Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showExpenseMessage(
+      "Payment Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveExpenseBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/expense",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+          },
+
+          body: JSON.stringify({
+            expense_type: type,
+            amount,
+            payment_account_id:
+              accountId,
+            expense_date: date,
+            category,
+            note
+          })
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Expense save failed"
+      );
+
+    }
+
+
+    showExpenseMessage(
+      "খরচ সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "expenseAmount"
+    ).value = "";
+
+    document.getElementById(
+      "expenseCategory"
+    ).value = "";
+
+    document.getElementById(
+      "expenseNote"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Expense error:",
+      error
+    );
+
+
+    showExpenseMessage(
+      error.message ||
+      "খরচ সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "খরচ সংরক্ষণ";
+  }
+}
+
+
+function showExpenseMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "expenseMessage"
+    );
+
+  if (!element) return;
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+
+// ============================================================
+// OTHER INCOME MODULE
+// ============================================================
+
+let incomeAccounts = [];
+
+async function renderOtherIncome() {
+
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>অন্যান্য আয়</h1>
+        <p>Business Other Income</p>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Amount</label>
+
+          <input
+            id="incomeAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Receive Account</label>
+
+          <select id="incomeAccount">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Date</label>
+
+          <input
+            id="incomeDate"
+            type="date"
+            value="${todayDate()}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Category</label>
+
+          <input
+            id="incomeCategory"
+            type="text"
+            placeholder="যেমন: কমিশন"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Note</label>
+
+          <input
+            id="incomeNote"
+            type="text"
+            placeholder="নোট"
+          >
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+
+        <button
+          id="saveIncomeBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          আয় সংরক্ষণ
+        </button>
+
+      </div>
+
+      <div id="incomeMessage"></div>
+
+    </section>
+  `;
+
+
+  await loadIncomeAccounts();
+
+  bindIncomeEvents();
+}
+
+
+async function loadIncomeAccounts() {
+
+  const response =
+    await fetch("/api/accounts");
+
+  if (!response.ok) {
+    throw new Error(
+      "Accounts load failed"
+    );
+  }
+
+  incomeAccounts =
+    await response.json();
+
+  populateIncomeAccounts();
+}
+
+
+function populateIncomeAccounts() {
+
+  const select =
+    document.getElementById(
+      "incomeAccount"
+    );
+
+  if (!select) return;
+
+
+  const accounts =
+    incomeAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+function bindIncomeEvents() {
+
+  document
+    .getElementById(
+      "saveIncomeBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveOtherIncome
+    );
+}
+
+
+async function saveOtherIncome() {
+
+  const amount =
+    Number(
+      document.getElementById(
+        "incomeAmount"
+      ).value || 0
+    );
+
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "incomeAccount"
+      ).value || 0
+    );
+
+
+  const date =
+    document.getElementById(
+      "incomeDate"
+    ).value;
+
+
+  const category =
+    document.getElementById(
+      "incomeCategory"
+    ).value.trim();
+
+
+  const note =
+    document.getElementById(
+      "incomeNote"
+    ).value.trim();
+
+
+  if (amount <= 0) {
+
+    showIncomeMessage(
+      "সঠিক Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showIncomeMessage(
+      "Receive Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveIncomeBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/other-income",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+          },
+
+          body: JSON.stringify({
+            amount,
+            receive_account_id:
+              accountId,
+            income_date:
+              date,
+            category,
+            note
+          })
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Other income save failed"
+      );
+
+    }
+
+
+    showIncomeMessage(
+      "অন্যান্য আয় সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "incomeAmount"
+    ).value = "";
+
+    document.getElementById(
+      "incomeCategory"
+    ).value = "";
+
+    document.getElementById(
+      "incomeNote"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Income error:",
+      error
+    );
+
+
+    showIncomeMessage(
+      error.message ||
+      "অন্যান্য আয় সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "আয় সংরক্ষণ";
+  }
+}
+
+
+function showIncomeMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "incomeMessage"
+    );
+
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+
+// ============================================================
+// ACCOUNT TRANSFER MODULE
+// ============================================================
+
+let transferAccounts = [];
+
+async function renderAccountTransfer() {
+
+  app.innerHTML = `
+    <section class="page-header">
+
+      <div>
+
+        <h1>Account Transfer</h1>
+
+        <p>
+          Cash / bKash / Nagad / Rocket / Recharge
+          account transfer
+        </p>
+
+      </div>
+
+    </section>
+
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+
+          <label>From Account</label>
+
+          <select id="transferFromAccount">
+
+            <option value="">
+              Account নির্বাচন
+            </option>
+
+          </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>To Account</label>
+
+          <select id="transferToAccount">
+
+            <option value="">
+              Account নির্বাচন
+            </option>
+
+          </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Amount</label>
+
+          <input
+            id="transferAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Date</label>
+
+          <input
+            id="transferDate"
+            type="date"
+            value="${todayDate()}"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Reference</label>
+
+          <input
+            id="transferReference"
+            type="text"
+            placeholder="Reference"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Note</label>
+
+          <input
+            id="transferNote"
+            type="text"
+            placeholder="নোট"
+          >
+
+        </div>
+
+      </div>
+
+
+      <div class="form-actions">
+
+        <button
+          id="saveTransferBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          Transfer সংরক্ষণ
+        </button>
+
+      </div>
+
+
+      <div id="transferMessage"></div>
+
+    </section>
+  `;
+
+
+  await loadTransferAccounts();
+
+  bindTransferEvents();
+}
+
+
+// ============================================================
+// LOAD TRANSFER ACCOUNTS
+// ============================================================
+
+async function loadTransferAccounts() {
+
+  const response =
+    await fetch(
+      "/api/accounts"
+    );
+
+
+  if (!response.ok) {
+
+    throw new Error(
+      "Accounts load failed"
+    );
+
+  }
+
+
+  transferAccounts =
+    await response.json();
+
+
+  populateTransferAccounts();
+}
+
+
+// ============================================================
+// POPULATE TRANSFER ACCOUNTS
+// ============================================================
+
+function populateTransferAccounts() {
+
+  const fromSelect =
+    document.getElementById(
+      "transferFromAccount"
+    );
+
+
+  const toSelect =
+    document.getElementById(
+      "transferToAccount"
+    );
+
+
+  if (!fromSelect || !toSelect) {
+    return;
+  }
+
+
+  const accounts =
+    transferAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030,
+          1040,
+          1050,
+          1060,
+          1070
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+
+  const options = accounts
+    .map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `)
+    .join("");
+
+
+  fromSelect.innerHTML = `
+    <option value="">
+      From Account নির্বাচন
+    </option>
+
+    ${options}
+  `;
+
+
+  toSelect.innerHTML = `
+    <option value="">
+      To Account নির্বাচন
+    </option>
+
+    ${options}
+  `;
+}
+
+
+// ============================================================
+// TRANSFER EVENTS
+// ============================================================
+
+function bindTransferEvents() {
+
+  document
+    .getElementById(
+      "saveTransferBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveAccountTransfer
+    );
+}
+
+
+// ============================================================
+// SAVE ACCOUNT TRANSFER
+// ============================================================
+
+async function saveAccountTransfer() {
+
+  const fromAccountId =
+    Number(
+      document.getElementById(
+        "transferFromAccount"
+      ).value || 0
+    );
+
+
+  const toAccountId =
+    Number(
+      document.getElementById(
+        "transferToAccount"
+      ).value || 0
+    );
+
+
+  const amount =
+    Number(
+      document.getElementById(
+        "transferAmount"
+      ).value || 0
+    );
+
+
+  const date =
+    document.getElementById(
+      "transferDate"
+    ).value;
+
+
+  const reference =
+    document.getElementById(
+      "transferReference"
+    ).value.trim();
+
+
+  const note =
+    document.getElementById(
+      "transferNote"
+    ).value.trim();
+
+
+  if (!fromAccountId) {
+
+    showTransferMessage(
+      "From Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!toAccountId) {
+
+    showTransferMessage(
+      "To Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (
+    fromAccountId ===
+    toAccountId
+  ) {
+
+    showTransferMessage(
+      "From এবং To Account একই হতে পারবে না।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (amount <= 0) {
+
+    showTransferMessage(
+      "সঠিক Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveTransferBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "Transfer হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/account-transfer",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body:
+            JSON.stringify({
+
+              from_account_id:
+                fromAccountId,
+
+              to_account_id:
+                toAccountId,
+
+              amount,
+
+              transfer_date:
+                date,
+
+              reference,
+
+              note
+
+            })
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Account transfer save failed"
+      );
+
+    }
+
+
+    showTransferMessage(
+      "Account transfer সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "transferAmount"
+    ).value = "";
+
+
+    document.getElementById(
+      "transferReference"
+    ).value = "";
+
+
+    document.getElementById(
+      "transferNote"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Transfer error:",
+      error
+    );
+
+
+    showTransferMessage(
+      error.message ||
+      "Account transfer সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "Transfer সংরক্ষণ";
+
+  }
+}
+
+
+// ============================================================
+// TRANSFER MESSAGE
+// ============================================================
+
+function showTransferMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "transferMessage"
+    );
+
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+
+// ============================================================
+// ACCOUNTS MODULE
+// ============================================================
+
+let accountList = [];
+
+
+async function renderAccounts() {
+
+  app.innerHTML = `
+
+    <section class="page-header">
+
+      <div>
+
+        <h1>Accounts</h1>
+
+        <p>
+          Cash, Mobile Banking এবং অন্যান্য হিসাব
+        </p>
+
+      </div>
+
+    </section>
+
+
+    <section class="card">
+
+      <div class="section-title">
+
+        <h2>Account Balances</h2>
+
+      </div>
+
+
+      <div id="accountList">
+
+        <div class="empty-state">
+          Loading...
+        </div>
+
+      </div>
+
+    </section>
+
+  `;
+
+
+  await loadAccounts();
+
+  renderAccountList();
+}
+
+
+// ============================================================
+// LOAD ACCOUNTS
+// ============================================================
+
+async function loadAccounts() {
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/accounts"
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Accounts load failed"
+      );
+
+    }
+
+
+    accountList =
+      Array.isArray(result)
+        ? result
+        : (
+          result.accounts ||
+          []
+        );
+
+
+  } catch (error) {
+
+    console.error(
+      "Accounts error:",
+      error
+    );
+
+
+    accountList = [];
+
+  }
+}
+
+
+// ============================================================
+// RENDER ACCOUNT LIST
+// ============================================================
+
+function renderAccountList() {
+
+  const container =
+    document.getElementById(
+      "accountList"
+    );
+
+
+  if (!container) return;
+
+
+  if (!accountList.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো account পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+
+            <th>Code</th>
+
+            <th>Account</th>
+
+            <th>Type</th>
+
+            <th>Balance</th>
+
+          </tr>
+
+        </thead>
+
+
+        <tbody>
+
+          ${accountList.map(account => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  String(
+                    account.code || ""
+                  )
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  account.name || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  account.account_type ||
+                  account.type ||
+                  ""
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  account.current_balance ||
+                  account.balance ||
+                  0
+                )}
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  `;
+}
+
+
+// ============================================================
+// END OF PART
+// ============================================================
           Loading...
         </div>
       </div>
@@ -5807,6 +12737,323 @@ function showExpenseMessage(
     </div>
   `;
 }
+          <label>Amount</label>
+
+          <input
+            id="expenseAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Payment Account</label>
+
+          <select id="expenseAccount">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Date</label>
+
+          <input
+            id="expenseDate"
+            type="date"
+            value="${todayDate()}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Category</label>
+
+          <input
+            id="expenseCategory"
+            type="text"
+            placeholder="যেমন: বিদ্যুৎ / ভাড়া / খাবার"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Note</label>
+
+          <input
+            id="expenseNote"
+            type="text"
+            placeholder="নোট"
+          >
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+
+        <button
+          id="saveExpenseBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          খরচ সংরক্ষণ
+        </button>
+
+      </div>
+
+      <div id="expenseMessage"></div>
+
+    </section>
+  `;
+
+  await loadExpenseAccounts();
+
+  bindExpenseEvents();
+}
+
+
+async function loadExpenseAccounts() {
+
+  const response =
+    await fetch("/api/accounts");
+
+  if (!response.ok) {
+    throw new Error(
+      "Accounts load failed"
+    );
+  }
+
+  expenseAccounts =
+    await response.json();
+
+  populateExpenseAccounts();
+}
+
+
+function populateExpenseAccounts() {
+
+  const select =
+    document.getElementById(
+      "expenseAccount"
+    );
+
+  if (!select) return;
+
+  const accounts =
+    expenseAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+function bindExpenseEvents() {
+
+  document
+    .getElementById("saveExpenseBtn")
+    ?.addEventListener(
+      "click",
+      saveExpense
+    );
+}
+
+
+async function saveExpense() {
+
+  const type =
+    document.getElementById(
+      "expenseType"
+    ).value;
+
+  const amount =
+    Number(
+      document.getElementById(
+        "expenseAmount"
+      ).value || 0
+    );
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "expenseAccount"
+      ).value || 0
+    );
+
+  const date =
+    document.getElementById(
+      "expenseDate"
+    ).value;
+
+  const category =
+    document.getElementById(
+      "expenseCategory"
+    ).value.trim();
+
+  const note =
+    document.getElementById(
+      "expenseNote"
+    ).value.trim();
+
+
+  if (amount <= 0) {
+
+    showExpenseMessage(
+      "সঠিক Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showExpenseMessage(
+      "Payment Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveExpenseBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/expense",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+          },
+
+          body: JSON.stringify({
+            expense_type: type,
+            amount,
+            payment_account_id:
+              accountId,
+            expense_date: date,
+            category,
+            note
+          })
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Expense save failed"
+      );
+
+    }
+
+
+    showExpenseMessage(
+      "খরচ সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "expenseAmount"
+    ).value = "";
+
+    document.getElementById(
+      "expenseCategory"
+    ).value = "";
+
+    document.getElementById(
+      "expenseNote"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Expense error:",
+      error
+    );
+
+
+    showExpenseMessage(
+      error.message ||
+      "খরচ সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "খরচ সংরক্ষণ";
+  }
+}
+
+
+function showExpenseMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "expenseMessage"
+    );
+
+  if (!element) return;
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
 // ============================================================
 // OTHER INCOME MODULE
 // ============================================================
@@ -6150,845 +13397,6 @@ function showIncomeMessage(
     </div>
   `;
 }
-
-// ============================================================
-// ACCOUNT TRANSFER MODULE
-// ============================================================
-
-let transferAccounts = [];
-
-async function renderAccountTransfer() {
-
-  app.innerHTML = `
-    <section class="page-header">
-      <div>
-        <h1>Account Transfer</h1>
-        <p>Cash / bKash / Nagad / Rocket</p>
-      </div>
-    </section>
-
-    <section class="card">
-
-      <div class="form-grid">
-
-        <div class="form-group">
-
-          <label>From Account</label>
-
-          <select id="transferFrom">
-            <option value="">
-              Account নির্বাচন
-            </option>
-          </select>
-
-        </div>
-
-
-        <div class="form-group">
-
-          <label>To Account</label>
-
-          <select id="transferTo">
-            <option value="">
-              Account নির্বাচন
-            </option>
-          </select>
-
-        </div>
-
-
-        <div class="form-group">
-
-          <label>Amount</label>
-
-          <input
-            id="transferAmount"
-            type="number"
-            min="0.01"
-            step="0.01"
-            placeholder="0.00"
-          >
-
-        </div>
-
-
-        <div class="form-group">
-
-          <label>Date</label>
-
-          <input
-            id="transferDate"
-            type="date"
-            value="${todayDate()}"
-          >
-
-        </div>
-
-
-        <div class="form-group">
-
-          <label>Note</label>
-
-          <input
-            id="transferNote"
-            type="text"
-            placeholder="নোট"
-          >
-
-        </div>
-
-      </div>
-
-
-      <div class="form-actions">
-
-        <button
-          id="saveTransferBtn"
-          class="btn btn-primary"
-          type="button"
-        >
-          Transfer সংরক্ষণ
-        </button>
-
-      </div>
-
-
-      <div id="transferMessage"></div>
-
-    </section>
-  `;
-
-
-  await loadTransferAccounts();
-
-  bindTransferEvents();
-}
-
-
-async function loadTransferAccounts() {
-
-  const response =
-    await fetch("/api/accounts");
-
-
-  if (!response.ok) {
-
-    throw new Error(
-      "Accounts load failed"
-    );
-
-  }
-
-
-  transferAccounts =
-    await response.json();
-
-
-  populateTransferAccounts();
-}
-
-
-function populateTransferAccounts() {
-
-  const from =
-    document.getElementById(
-      "transferFrom"
-    );
-
-  const to =
-    document.getElementById(
-      "transferTo"
-    );
-
-
-  if (!from || !to) return;
-
-
-  const accounts =
-    transferAccounts.filter(
-      account =>
-        [
-          1000,
-          1010,
-          1020,
-          1030
-        ].includes(
-          Number(account.code)
-        )
-    );
-
-
-  const options = `
-    <option value="">
-      Account নির্বাচন
-    </option>
-
-    ${accounts.map(account => `
-      <option value="${account.id}">
-        ${escapeHtml(account.name)}
-      </option>
-    `).join("")}
-  `;
-
-
-  from.innerHTML =
-    options;
-
-  to.innerHTML =
-    options;
-}
-
-
-function bindTransferEvents() {
-
-  document
-    .getElementById(
-      "saveTransferBtn"
-    )
-    ?.addEventListener(
-      "click",
-      saveAccountTransfer
-    );
-}
-
-
-async function saveAccountTransfer() {
-
-  const fromAccountId =
-    Number(
-      document.getElementById(
-        "transferFrom"
-      ).value || 0
-    );
-
-
-  const toAccountId =
-    Number(
-      document.getElementById(
-        "transferTo"
-      ).value || 0
-    );
-
-
-  const amount =
-    Number(
-      document.getElementById(
-        "transferAmount"
-      ).value || 0
-    );
-
-
-  const date =
-    document.getElementById(
-      "transferDate"
-    ).value;
-
-
-  const note =
-    document.getElementById(
-      "transferNote"
-    ).value.trim();
-
-
-  if (!fromAccountId) {
-
-    showTransferMessage(
-      "From Account নির্বাচন করুন।",
-      "error"
-    );
-
-    return;
-  }
-
-
-  if (!toAccountId) {
-
-    showTransferMessage(
-      "To Account নির্বাচন করুন।",
-      "error"
-    );
-
-    return;
-  }
-
-
-  if (
-    fromAccountId ===
-    toAccountId
-  ) {
-
-    showTransferMessage(
-      "From ও To Account একই হতে পারবে না।",
-      "error"
-    );
-
-    return;
-  }
-
-
-  if (amount <= 0) {
-
-    showTransferMessage(
-      "সঠিক Amount দিন।",
-      "error"
-    );
-
-    return;
-  }
-
-
-  const button =
-    document.getElementById(
-      "saveTransferBtn"
-    );
-
-
-  try {
-
-    button.disabled = true;
-
-    button.textContent =
-      "সংরক্ষণ হচ্ছে...";
-
-
-    const response =
-      await fetch(
-        "/api/transactions/account-transfer",
-        {
-
-          method: "POST",
-
-          headers: {
-
-            "Content-Type":
-              "application/json",
-
-            "Idempotency-Key":
-              crypto.randomUUID()
-
-          },
-
-          body: JSON.stringify({
-
-            from_account_id:
-              fromAccountId,
-
-            to_account_id:
-              toAccountId,
-
-            amount,
-
-            transfer_date:
-              date,
-
-            note
-
-          })
-
-        }
-      );
-
-
-    const result =
-      await response.json();
-
-
-    if (!response.ok) {
-
-      throw new Error(
-        result.error ||
-        "Transfer save failed"
-      );
-
-    }
-
-
-    showTransferMessage(
-      "Account Transfer সফলভাবে সংরক্ষণ হয়েছে।",
-      "success"
-    );
-
-
-    document.getElementById(
-      "transferAmount"
-    ).value = "";
-
-    document.getElementById(
-      "transferNote"
-    ).value = "";
-
-
-  } catch (error) {
-
-    console.error(
-      "Transfer error:",
-      error
-    );
-
-
-    showTransferMessage(
-      error.message ||
-      "Transfer সংরক্ষণ করা যায়নি।",
-      "error"
-    );
-
-
-  } finally {
-
-    button.disabled = false;
-
-    button.textContent =
-      "Transfer সংরক্ষণ";
-  }
-}
-
-
-function showTransferMessage(
-  message,
-  type = "error"
-) {
-
-  const element =
-    document.getElementById(
-      "transferMessage"
-    );
-
-  if (!element) return;
-
-
-  element.innerHTML = `
-    <div class="alert ${type}">
-      ${escapeHtml(message)}
-    </div>
-  `;
-}
-
-/* =========================================================
-   CUSTOMERS
-   ========================================================= */
-
-async function loadCustomers() {
-
-  const data =
-    await api("/api/customers");
-
-  state.customers =
-    Array.isArray(data)
-      ? data
-      : data.customers || [];
-
-  return state.customers;
-}
-
-
-async function renderCustomers() {
-
-  try {
-
-    showLoading("কাস্টমার লোড হচ্ছে...");
-
-    const customers =
-      await loadCustomers();
-
-
-    pageContent.innerHTML = `
-
-      <div class="card">
-
-        <div class="card-header">
-
-          <h3>
-            Customer List
-          </h3>
-
-        </div>
-
-        <div class="card-body">
-
-          <div class="toolbar">
-
-            <input
-              id="customerSearch"
-              class="form-control search-box"
-              type="search"
-              placeholder="কাস্টমার খুঁজুন..."
-            >
-
-            <span class="badge badge-info">
-              মোট ${number(customers.length)}
-            </span>
-
-          </div>
-
-
-          <div
-            id="customerTable"
-            class="table-wrapper"
-          >
-
-            ${customerTableHtml(customers)}
-
-          </div>
-
-        </div>
-
-      </div>
-
-    `;
-
-
-    $("#customerSearch")
-      .addEventListener(
-        "input",
-        event => {
-
-          const query =
-            event.target.value
-              .trim()
-              .toLowerCase();
-
-          const filtered =
-            customers.filter(customer => {
-
-              return [
-
-                customer.name,
-                customer.phone,
-                customer.address
-
-              ]
-                .join(" ")
-                .toLowerCase()
-                .includes(query);
-
-            });
-
-
-          $("#customerTable").innerHTML =
-            customerTableHtml(filtered);
-
-        }
-      );
-
-
-  } catch (error) {
-
-    renderError(error);
-
-  } finally {
-
-    hideLoading();
-
-  }
-
-}
-
-
-function customerTableHtml(customers) {
-
-  if (!customers.length) {
-
-    return `
-
-      <div class="empty-state">
-
-        <div class="icon">
-          👥
-        </div>
-
-        <strong>
-          কোনো কাস্টমার নেই
-        </strong>
-
-      </div>
-
-    `;
-
-  }
-
-
-  return `
-
-    <table class="data-table">
-
-      <thead>
-
-        <tr>
-
-          <th>নাম</th>
-          <th>মোবাইল</th>
-          <th>ঠিকানা</th>
-          <th class="text-right">
-            বাকি
-          </th>
-
-        </tr>
-
-      </thead>
-
-      <tbody>
-
-        ${customers.map(customer => `
-
-          <tr>
-
-            <td>
-              <strong>
-                ${escapeHtml(customer.name)}
-              </strong>
-            </td>
-
-            <td>
-              ${escapeHtml(
-                customer.phone || "-"
-              )}
-            </td>
-
-            <td>
-              ${escapeHtml(
-                customer.address || "-"
-              )}
-            </td>
-
-            <td class="text-right">
-
-              ৳${money(
-                customer.current_due ??
-                customer.due ??
-                0
-              )}
-
-            </td>
-
-          </tr>
-
-        `).join("")}
-
-      </tbody>
-
-    </table>
-
-  `;
-
-}
-
-
-/* =========================================================
-   SUPPLIERS
-   ========================================================= */
-
-async function loadSuppliers() {
-
-  const data =
-    await api("/api/suppliers");
-
-  state.suppliers =
-    Array.isArray(data)
-      ? data
-      : data.suppliers || [];
-
-  return state.suppliers;
-}
-
-
-async function renderSuppliers() {
-
-  try {
-
-    showLoading("সাপ্লায়ার লোড হচ্ছে...");
-
-    const suppliers =
-      await loadSuppliers();
-
-
-    pageContent.innerHTML = `
-
-      <div class="card">
-
-        <div class="card-header">
-
-          <h3>
-            Supplier List
-          </h3>
-
-        </div>
-
-        <div class="card-body">
-
-          <div class="toolbar">
-
-            <input
-              id="supplierSearch"
-              class="form-control search-box"
-              type="search"
-              placeholder="সাপ্লায়ার খুঁজুন..."
-            >
-
-            <span class="badge badge-info">
-              মোট ${number(suppliers.length)}
-            </span>
-
-          </div>
-
-
-          <div
-            id="supplierTable"
-            class="table-wrapper"
-          >
-
-            ${supplierTableHtml(suppliers)}
-
-          </div>
-
-        </div>
-
-      </div>
-
-    `;
-
-
-    $("#supplierSearch")
-      .addEventListener(
-        "input",
-        event => {
-
-          const query =
-            event.target.value
-              .trim()
-              .toLowerCase();
-
-          const filtered =
-            suppliers.filter(supplier => {
-
-              return [
-
-                supplier.name,
-                supplier.phone,
-                supplier.address
-
-              ]
-                .join(" ")
-                .toLowerCase()
-                .includes(query);
-
-            });
-
-
-          $("#supplierTable").innerHTML =
-            supplierTableHtml(filtered);
-
-        }
-      );
-
-
-  } catch (error) {
-
-    renderError(error);
-
-  } finally {
-
-    hideLoading();
-
-  }
-
-}
-
-
-function supplierTableHtml(suppliers) {
-
-  if (!suppliers.length) {
-
-    return `
-
-      <div class="empty-state">
-
-        <div class="icon">
-          🏪
-        </div>
-
-        <strong>
-          কোনো সাপ্লায়ার নেই
-        </strong>
-
-      </div>
-
-    `;
-
-  }
-
-
-  return `
-
-    <table class="data-table">
-
-      <thead>
-
-        <tr>
-
-          <th>নাম</th>
-          <th>মোবাইল</th>
-          <th>ঠিকানা</th>
-          <th class="text-right">
-            বাকি
-          </th>
-
-        </tr>
-
-      </thead>
-
-      <tbody>
-
-        ${suppliers.map(supplier => `
-
-          <tr>
-
-            <td>
-              <strong>
-                ${escapeHtml(supplier.name)}
-              </strong>
-            </td>
-
-            <td>
-              ${escapeHtml(
-                supplier.phone || "-"
-              )}
-            </td>
-
-            <td>
-              ${escapeHtml(
-                supplier.address || "-"
-              )}
-            </td>
-
-            <td class="text-right">
-
-              ৳${money(
-                supplier.current_due ??
-                supplier.due ??
-                0
-              )}
-
-            </td>
-
-          </tr>
-
-        `).join("")}
-
-      </tbody>
-
-    </table>
-
-  `;
-
-}
-
-
-/* =========================================================
-   ACCOUNTS
-   ========================================================= */
-
-async function loadAccounts() {
-
   const data =
     await api("/api/accounts");
 
@@ -7005,7 +13413,7 @@ async function renderAccounts() {
 
   try {
 
-    showLoading("হিসাব লোড হচ্ছে...");
+    showLoading("অ্যাকাউন্ট লোড হচ্ছে...");
 
     const accounts =
       await loadAccounts();
@@ -7018,20 +13426,78 @@ async function renderAccounts() {
         <div class="card-header">
 
           <h3>
-            হিসাবের Account
+            Account List
           </h3>
 
         </div>
 
         <div class="card-body">
 
-          ${accountTableHtml(accounts)}
+          <div class="toolbar">
+
+            <input
+              id="accountSearch"
+              class="form-control search-box"
+              type="search"
+              placeholder="অ্যাকাউন্ট খুঁজুন..."
+            >
+
+            <span class="badge badge-info">
+              মোট ${number(accounts.length)}
+            </span>
+
+          </div>
+
+
+          <div
+            id="accountTable"
+            class="table-wrapper"
+          >
+
+            ${accountTableHtml(accounts)}
+
+          </div>
 
         </div>
 
       </div>
 
     `;
+
+
+    $("#accountSearch")
+      .addEventListener(
+        "input",
+        event => {
+
+          const query =
+            event.target.value
+              .trim()
+              .toLowerCase();
+
+
+          const filtered =
+            accounts.filter(account => {
+
+              return [
+
+                account.name,
+                account.code,
+                account.account_type
+
+              ]
+                .join(" ")
+                .toLowerCase()
+                .includes(query);
+
+            });
+
+
+          $("#accountTable").innerHTML =
+            accountTableHtml(filtered);
+
+        }
+      );
 
 
   } catch (error) {
@@ -7056,11 +13522,11 @@ function accountTableHtml(accounts) {
       <div class="empty-state">
 
         <div class="icon">
-          🏦
+          💳
         </div>
 
         <strong>
-          কোনো account পাওয়া যায়নি
+          কোনো অ্যাকাউন্ট নেই
         </strong>
 
       </div>
@@ -7072,16 +13538,2514 @@ function accountTableHtml(accounts) {
 
   return `
 
-    <div class="table-wrapper">
+    <table class="data-table">
 
-      <table class="data-table">
+      <thead>
+
+        <tr>
+
+          <th>
+            Code
+          </th>
+
+          <th>
+            Account
+          </th>
+
+          <th>
+            Type
+          </th>
+
+          <th class="text-right">
+            Balance
+          </th>
+
+        </tr>
+
+      </thead>
+
+      <tbody>
+
+        ${accounts.map(account => `
+
+          <tr>
+
+            <td>
+              ${escapeHtml(
+                String(account.code || "")
+              )}
+            </td>
+
+            <td>
+              <strong>
+                ${escapeHtml(
+                  account.name || ""
+                )}
+              </strong>
+            </td>
+
+            <td>
+              ${escapeHtml(
+                account.account_type || "-"
+              )}
+            </td>
+
+            <td class="text-right">
+
+              ৳${money(
+                account.current_balance ||
+                0
+              )}
+
+            </td>
+
+          </tr>
+
+        `).join("")}
+
+      </tbody>
+
+    </table>
+
+  `;
+
+}
+
+
+/* =========================================================
+   STOCK VERIFICATION
+   ========================================================= */
+
+async function renderStockVerification() {
+
+  try {
+
+    showLoading(
+      "Stock verification data লোড হচ্ছে..."
+    );
+
+
+    const products =
+      await loadProducts();
+
+
+    pageContent.innerHTML = `
+
+      <div class="card">
+
+        <div class="card-header">
+
+          <div>
+
+            <h3>
+              স্টক ভেলু যাচাই
+            </h3>
+
+            <p class="muted">
+              System Stock বনাম Physical Stock
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <div class="card-body">
+
+          <div class="toolbar">
+
+            <input
+              id="stockVerificationSearch"
+              class="form-control search-box"
+              type="search"
+              placeholder="পণ্য খুঁজুন..."
+            >
+
+            <button
+              id="saveStockVerificationBtn"
+              class="btn btn-primary"
+              type="button"
+            >
+              যাচাই সংরক্ষণ
+            </button>
+
+          </div>
+
+
+          <div
+            id="stockVerificationTable"
+            class="table-wrapper"
+          >
+
+            ${stockVerificationTableHtml(products)}
+
+          </div>
+
+
+          <div
+            id="stockVerificationSummary"
+            class="summary-grid"
+          >
+
+            <div class="summary-card">
+
+              <span>
+                System Stock Value
+              </span>
+
+              <strong id="verificationSystemValue">
+                ৳0.00
+              </strong>
+
+            </div>
+
+
+            <div class="summary-card">
+
+              <span>
+                Physical Stock Value
+              </span>
+
+              <strong id="verificationPhysicalValue">
+                ৳0.00
+              </strong>
+
+            </div>
+
+
+            <div class="summary-card">
+
+              <span>
+                Difference
+              </span>
+
+              <strong id="verificationDifference">
+                ৳0.00
+              </strong>
+
+            </div>
+
+          </div>
+
+
+          <div id="stockVerificationMessage"></div>
+
+        </div>
+
+      </div>
+
+    `;
+
+
+    bindStockVerificationEvents(
+      products
+    );
+
+    updateStockVerificationSummary();
+
+
+  } catch (error) {
+
+    renderError(error);
+
+  } finally {
+
+    hideLoading();
+
+  }
+
+}
+
+
+function stockVerificationTableHtml(
+  products
+) {
+
+  if (!products.length) {
+
+    return `
+
+      <div class="empty-state">
+
+        <div class="icon">
+          📦
+        </div>
+
+        <strong>
+          কোনো পণ্য নেই
+        </strong>
+
+      </div>
+
+    `;
+
+  }
+
+
+  return `
+
+    <table
+      class="data-table stock-verification-table"
+    >
+
+      <thead>
+
+        <tr>
+
+          <th>
+            পণ্য
+          </th>
+
+          <th>
+            System Qty
+          </th>
+
+          <th>
+            Purchase Price
+          </th>
+
+          <th>
+            System Value
+          </th>
+
+          <th>
+            Physical Qty
+          </th>
+
+          <th>
+            Physical Value
+          </th>
+
+          <th>
+            Difference
+          </th>
+
+        </tr>
+
+      </thead>
+
+
+      <tbody>
+
+        ${products.map(product => {
+
+          const stock =
+            Number(
+              product.current_stock || 0
+            );
+
+
+          const price =
+            Number(
+              product.last_purchase_cost ??
+              product.purchase_price ??
+              0
+            );
+
+
+          const value =
+            stock * price;
+
+
+          return `
+
+            <tr
+              data-product-id="${product.id}"
+              data-system-value="${value}"
+            >
+
+              <td>
+
+                <strong>
+                  ${escapeHtml(
+                    product.name || ""
+                  )}
+                </strong>
+
+                <div class="muted small">
+                  ${escapeHtml(
+                    product.sku || ""
+                  )}
+                </div>
+
+              </td>
+
+
+              <td>
+                ${number(stock)}
+              </td>
+
+
+              <td>
+                ৳${money(price)}
+              </td>
+
+
+              <td class="system-value">
+                ৳${money(value)}
+              </td>
+
+
+              <td>
+
+                <input
+                  class="form-control physical-qty"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value=""
+                  placeholder="Qty"
+                  data-product-id="${product.id}"
+                >
+
+              </td>
+
+
+              <td class="physical-value">
+                ৳0.00
+              </td>
+
+
+              <td class="verification-difference">
+                ৳0.00
+              </td>
+
+            </tr>
+
+          `;
+
+        }).join("")}
+
+      </tbody>
+
+    </table>
+
+  `;
+
+}
+
+
+function bindStockVerificationEvents(
+  products
+) {
+
+  const search =
+    document.getElementById(
+      "stockVerificationSearch"
+    );
+
+
+  search?.addEventListener(
+    "input",
+    () => {
+
+      const query =
+        search.value
+          .trim()
+          .toLowerCase();
+
+
+      const filtered =
+        products.filter(product => {
+
+          return [
+
+            product.name,
+            product.sku
+
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+
+        });
+
+
+      const table =
+        document.getElementById(
+          "stockVerificationTable"
+        );
+
+
+      if (table) {
+
+        table.innerHTML =
+          stockVerificationTableHtml(
+            filtered
+          );
+
+      }
+
+
+      bindStockVerificationInputs();
+
+      updateStockVerificationSummary();
+
+    }
+  );
+
+
+  bindStockVerificationInputs();
+
+
+  document
+    .getElementById(
+      "saveStockVerificationBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveStockVerification
+    );
+
+}
+
+
+function bindStockVerificationInputs() {
+
+  document
+    .querySelectorAll(
+      ".physical-qty"
+    )
+    .forEach(input => {
+
+      input.addEventListener(
+        "input",
+        updateStockVerificationSummary
+      );
+
+    });
+
+}
+
+
+function updateStockVerificationSummary() {
+
+  let systemValue = 0;
+
+  let physicalValue = 0;
+
+
+  document
+    .querySelectorAll(
+      ".stock-verification-table tbody tr"
+    )
+    .forEach(row => {
+
+      const system =
+        Number(
+          row.dataset.systemValue || 0
+        );
+
+
+      const input =
+        row.querySelector(
+          ".physical-qty"
+        );
+
+
+      const physicalQty =
+        Number(
+          input?.value || 0
+        );
+
+
+      const price =
+        systemValue === undefined
+          ? 0
+          : Number(
+              row
+                .querySelector(
+                  "td:nth-child(3)"
+                )
+                ?.textContent
+                ?.replace(/[৳,]/g, "")
+                || 0
+            );
+
+
+      const physical =
+        physicalQty * price;
+
+
+      const difference =
+        physical - system;
+
+
+      systemValue += system;
+
+
+      physicalValue += physical;
+
+
+      const physicalCell =
+        row.querySelector(
+          ".physical-value"
+        );
+
+
+      const differenceCell =
+        row.querySelector(
+          ".verification-difference"
+        );
+
+
+      if (physicalCell) {
+
+        physicalCell.textContent =
+          `৳${money(physical)}`;
+
+      }
+
+
+      if (differenceCell) {
+
+        differenceCell.textContent =
+          `৳${money(difference)}`;
+
+      }
+
+    });
+
+
+  const difference =
+    physicalValue -
+    systemValue;
+
+
+  const systemElement =
+    document.getElementById(
+      "verificationSystemValue"
+    );
+
+
+  const physicalElement =
+    document.getElementById(
+      "verificationPhysicalValue"
+    );
+
+
+  const differenceElement =
+    document.getElementById(
+      "verificationDifference"
+    );
+
+
+  if (systemElement) {
+
+    systemElement.textContent =
+      `৳${money(systemValue)}`;
+
+  }
+
+
+  if (physicalElement) {
+
+    physicalElement.textContent =
+      `৳${money(physicalValue)}`;
+
+  }
+
+
+  if (differenceElement) {
+
+    differenceElement.textContent =
+      `৳${money(difference)}`;
+
+  }
+
+}
+
+
+async function saveStockVerification() {
+
+  const rows =
+    Array.from(
+      document.querySelectorAll(
+        ".stock-verification-table tbody tr"
+      )
+    );
+
+
+  const items = [];
+
+
+  rows.forEach(row => {
+
+    const input =
+      row.querySelector(
+        ".physical-qty"
+      );
+
+
+    if (!input) return;
+
+
+    if (
+      input.value === "" ||
+      input.value === null
+    ) {
+      return;
+    }
+
+
+    const physicalQty =
+      Number(input.value);
+
+
+    if (
+      !Number.isFinite(
+        physicalQty
+      ) ||
+      physicalQty < 0
+    ) {
+
+      return;
+
+    }
+
+
+    items.push({
+
+      product_id:
+        Number(
+          row.dataset.productId
+        ),
+
+      physical_qty:
+        physicalQty
+
+    });
+
+  });
+
+
+  if (!items.length) {
+
+    showStockVerificationMessage(
+      "কমপক্ষে একটি পণ্যের Physical Qty দিন।",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveStockVerificationBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await apiFetch(
+        "/api/stock-verifications",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body: JSON.stringify({
+
+            verification_date:
+              todayDate(),
+
+            items
+
+          })
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Stock verification save failed"
+      );
+
+    }
+
+
+    showStockVerificationMessage(
+      "Stock Verification সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+  } catch (error) {
+
+    console.error(
+      "Stock verification error:",
+      error
+    );
+
+
+    showStockVerificationMessage(
+      error.message ||
+      "Stock Verification সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "যাচাই সংরক্ষণ";
+
+  }
+
+}
+
+
+function showStockVerificationMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "stockVerificationMessage"
+    );
+
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+
+  `;
+
+}
+
+
+/* =========================================================
+   STOCK ADJUSTMENT
+   ========================================================= */
+
+async function renderStockAdjustment() {
+
+  try {
+
+    const products =
+      await loadProducts();
+
+
+    pageContent.innerHTML = `
+
+      <div class="card">
+
+        <div class="card-header">
+
+          <h3>
+            Stock Adjustment
+          </h3>
+
+        </div>
+
+
+        <div class="card-body">
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                Product
+              </label>
+
+              <select id="adjustmentProduct">
+
+                <option value="">
+                  পণ্য নির্বাচন
+                </option>
+
+                ${products.map(product => `
+
+                  <option
+                    value="${product.id}"
+                  >
+                    ${escapeHtml(
+                      product.name
+                    )}
+                    —
+                    ${number(
+                      product.current_stock
+                    )}
+                  </option>
+
+                `).join("")}
+
+              </select>
+
+            </div>
+
+
+            <div class="form-group">
+
+              <label>
+                Adjustment Type
+              </label>
+
+              <select id="adjustmentType">
+
+                <option value="IN">
+                  Stock Increase
+                </option>
+
+                <option value="OUT">
+                  Stock Decrease
+                </option>
+
+              </select>
+
+            </div>
+
+
+            <div class="form-group">
+
+              <label>
+                Quantity
+              </label>
+
+              <input
+                id="adjustmentQuantity"
+                type="number"
+                min="0.001"
+                step="0.001"
+                placeholder="0"
+              >
+
+            </div>
+
+
+            <div class="form-group">
+
+              <label>
+                Reason
+              </label>
+
+              <input
+                id="adjustmentReason"
+                type="text"
+                placeholder="যেমন: নষ্ট / ভাঙা / অতিরিক্ত পাওয়া"
+              >
+
+            </div>
+
+
+            <div class="form-group">
+
+              <label>
+                Date
+              </label>
+
+              <input
+                id="adjustmentDate"
+                type="date"
+                value="${todayDate()}"
+              >
+
+            </div>
+
+          </div>
+
+
+          <div class="form-actions">
+
+            <button
+              id="saveStockAdjustmentBtn"
+              class="btn btn-primary"
+              type="button"
+            >
+              Adjustment সংরক্ষণ
+            </button>
+
+          </div>
+
+
+          <div id="stockAdjustmentMessage"></div>
+
+        </div>
+
+      </div>
+
+    `;
+
+
+    document
+      .getElementById(
+        "saveStockAdjustmentBtn"
+      )
+      ?.addEventListener(
+        "click",
+        saveStockAdjustment
+      );
+
+
+  } catch (error) {
+
+    renderError(error);
+
+  }
+
+}
+
+
+async function saveStockAdjustment() {
+
+  const productId =
+    Number(
+      document.getElementById(
+        "adjustmentProduct"
+      ).value || 0
+    );
+
+
+  const type =
+    document.getElementById(
+      "adjustmentType"
+    ).value;
+
+
+  const quantity =
+    Number(
+      document.getElementById(
+        "adjustmentQuantity"
+      ).value || 0
+    );
+
+
+  const reason =
+    document.getElementById(
+      "adjustmentReason"
+    ).value.trim();
+
+
+  const date =
+    document.getElementById(
+      "adjustmentDate"
+    ).value;
+
+
+  if (!productId) {
+
+    showStockAdjustmentMessage(
+      "Product নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0
+  ) {
+
+    showStockAdjustmentMessage(
+      "সঠিক Quantity দিন।",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  if (!reason) {
+
+    showStockAdjustmentMessage(
+      "Adjustment-এর কারণ লিখুন।",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveStockAdjustmentBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await apiFetch(
+        "/api/transactions/stock-adjustment",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body: JSON.stringify({
+
+            product_id:
+              productId,
+
+            adjustment_type:
+              type,
+
+            quantity,
+
+            reason,
+
+            adjustment_date:
+              date
+
+          })
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Stock adjustment failed"
+      );
+
+    }
+
+
+    showStockAdjustmentMessage(
+      "Stock Adjustment সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "adjustmentQuantity"
+    ).value = "";
+
+
+    document.getElementById(
+      "adjustmentReason"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Stock adjustment error:",
+      error
+    );
+
+
+    showStockAdjustmentMessage(
+      error.message ||
+      "Stock Adjustment সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "Adjustment সংরক্ষণ";
+
+  }
+
+}
+
+
+function showStockAdjustmentMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "stockAdjustmentMessage"
+    );
+
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+
+  `;
+
+}
+      <div class="form-group">
+
+        <label>
+          ${escapeHtml(
+            setting.label ||
+            setting.key ||
+            ""
+          )}
+        </label>
+
+        <input
+          type="text"
+          class="setting-input"
+          data-setting-key="${escapeHtml(
+            setting.key
+          )}"
+          value="${escapeHtml(
+            setting.value ?? ""
+          )}"
+        >
+
+      </div>
+
+    `).join("");
+
+
+  const actions = document.createElement(
+    "div"
+  );
+
+  actions.className =
+    "form-actions";
+
+
+  actions.innerHTML = `
+
+    <button
+      type="button"
+      id="saveSettingsBtn"
+      class="btn btn-primary"
+    >
+      Settings Save
+    </button>
+
+  `;
+
+
+  container.appendChild(actions);
+
+
+  document
+    .getElementById(
+      "saveSettingsBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveSettings
+    );
+
+}
+
+
+async function saveSettings() {
+
+  const inputs = [
+    ...document.querySelectorAll(
+      ".setting-input"
+    )
+  ];
+
+
+  const settings = inputs.map(
+    input => ({
+
+      key:
+        input.dataset.settingKey,
+
+      value:
+        input.value
+
+    })
+  );
+
+
+  try {
+
+    const button =
+      document.getElementById(
+        "saveSettingsBtn"
+      );
+
+
+    if (button) {
+
+      button.disabled = true;
+
+      button.textContent =
+        "Saving...";
+
+    }
+
+
+    const response =
+      await apiFetch(
+        "/api/settings",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body:
+            JSON.stringify({
+              settings
+            })
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Settings save failed"
+      );
+
+    }
+
+
+    alert(
+      "Settings সফলভাবে সংরক্ষণ হয়েছে।"
+    );
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(
+      error.message ||
+      "Settings সংরক্ষণ করা যায়নি।"
+    );
+
+
+  } finally {
+
+    const button =
+      document.getElementById(
+        "saveSettingsBtn"
+      );
+
+
+    if (button) {
+
+      button.disabled = false;
+
+      button.textContent =
+        "Settings Save";
+
+    }
+
+  }
+
+}
+
+
+// ============================================================
+// STEP 13 — AUDIT LOG
+// ============================================================
+
+async function renderAuditLog() {
+
+  app.innerHTML = `
+
+    <section class="page-header">
+
+      <div>
+
+        <h2>
+          📋 Audit Log
+        </h2>
+
+        <p>
+          System-এর গুরুত্বপূর্ণ পরিবর্তনের ইতিহাস
+        </p>
+
+      </div>
+
+    </section>
+
+
+    <div class="card">
+
+      <div class="toolbar">
+
+        <button
+          id="refreshAuditBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          Refresh
+        </button>
+
+      </div>
+
+
+      <div
+        id="auditLogContainer"
+        class="table-wrap"
+      >
+
+        Loading...
+
+      </div>
+
+    </div>
+
+  `;
+
+
+  document
+    .getElementById(
+      "refreshAuditBtn"
+    )
+    ?.addEventListener(
+      "click",
+      loadAuditLogs
+    );
+
+
+  await loadAuditLogs();
+
+}
+
+
+async function loadAuditLogs() {
+
+  const container =
+    document.getElementById(
+      "auditLogContainer"
+    );
+
+
+  if (!container) return;
+
+
+  container.innerHTML = `
+    <div class="empty-state">
+      Audit Log loading...
+    </div>
+  `;
+
+
+  try {
+
+    const response =
+      await apiFetch(
+        "/api/audit-logs"
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Audit log load failed"
+      );
+
+    }
+
+
+    const logs =
+      Array.isArray(data)
+        ? data
+        : data.logs || [];
+
+
+    if (!logs.length) {
+
+      container.innerHTML = `
+        <div class="empty-state">
+          কোনো Audit Log পাওয়া যায়নি।
+        </div>
+      `;
+
+      return;
+    }
+
+
+    container.innerHTML = `
+
+      <table>
 
         <thead>
 
           <tr>
 
-            <th>Account</th>
-            <th>Type</th>
+            <th>
+              Date
+            </th>
+
+            <th>
+              Action
+            </th>
+
+            <th>
+              Entity
+            </th>
+
+            <th>
+              Entity ID
+            </th>
+
+            <th>
+              Details
+            </th>
+
+          </tr>
+
+        </thead>
+
+
+        <tbody>
+
+          ${logs.map(log => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  log.created_at ||
+                  log.date ||
+                  ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  log.action ||
+                  log.event_type ||
+                  ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  log.entity_type ||
+                  ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  String(
+                    log.entity_id ??
+                    ""
+                  )
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  log.details ||
+                  log.metadata ||
+                  ""
+                )}
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    `;
+
+
+  } catch (error) {
+
+    console.error(error);
+
+
+    container.innerHTML = `
+
+      <div class="error-state">
+
+        ${escapeHtml(
+          error.message ||
+          "Audit log load failed"
+        )}
+
+      </div>
+
+    `;
+
+  }
+
+}
+
+
+// ============================================================
+// STEP 13 — BACKUP & RESTORE
+// ============================================================
+
+async function renderBackup() {
+
+  app.innerHTML = `
+
+    <section class="page-header">
+
+      <div>
+
+        <h2>
+          💾 Backup & Restore
+        </h2>
+
+        <p>
+          ব্যবসার ডাটার backup তৈরি ও restore
+        </p>
+
+      </div>
+
+    </section>
+
+
+    <div class="card">
+
+      <h3>
+        Create Backup
+      </h3>
+
+      <p class="muted">
+        বর্তমান database-এর backup JSON file হিসেবে তৈরি হবে।
+      </p>
+
+
+      <div class="form-actions">
+
+        <button
+          id="createBackupBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          Backup তৈরি করুন
+        </button>
+
+      </div>
+
+
+      <div id="backupMessage"></div>
+
+    </div>
+
+
+    <div class="card">
+
+      <h3>
+        Restore Backup
+      </h3>
+
+      <p class="muted">
+        ⚠️ Restore করার আগে বর্তমান data-এর backup রাখুন।
+      </p>
+
+
+      <input
+        type="file"
+        id="restoreFile"
+        accept=".json,application/json"
+      >
+
+
+      <div class="form-actions">
+
+        <button
+          id="restoreBackupBtn"
+          class="btn btn-danger"
+          type="button"
+        >
+          Backup Restore
+        </button>
+
+      </div>
+
+
+      <div id="restoreMessage"></div>
+
+    </div>
+
+  `;
+
+
+  document
+    .getElementById(
+      "createBackupBtn"
+    )
+    ?.addEventListener(
+      "click",
+      createBackup
+    );
+
+
+  document
+    .getElementById(
+      "restoreBackupBtn"
+    )
+    ?.addEventListener(
+      "click",
+      restoreBackup
+    );
+
+}
+
+
+async function createBackup() {
+
+  const button =
+    document.getElementById(
+      "createBackupBtn"
+    );
+
+
+  const message =
+    document.getElementById(
+      "backupMessage"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "Backup তৈরি হচ্ছে...";
+
+
+    const response =
+      await apiFetch(
+        "/api/system/backup"
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Backup failed"
+      );
+
+    }
+
+
+    const blob =
+      new Blob(
+        [
+          JSON.stringify(
+            data,
+            null,
+            2
+          )
+        ],
+        {
+          type:
+            "application/json"
+        }
+      );
+
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+
+    const link =
+      document.createElement(
+        "a"
+      );
+
+
+    const timestamp =
+      new Date()
+        .toISOString()
+        .replace(
+          /[:.]/g,
+          "-"
+        );
+
+
+    link.href = url;
+
+    link.download =
+      `chamak-store-backup-${timestamp}.json`;
+
+
+    document.body.appendChild(
+      link
+    );
+
+
+    link.click();
+
+
+    link.remove();
+
+
+    URL.revokeObjectURL(
+      url
+    );
+
+
+    message.innerHTML = `
+
+      <div class="alert success">
+
+        Backup সফলভাবে তৈরি হয়েছে।
+
+      </div>
+
+    `;
+
+
+  } catch (error) {
+
+    console.error(error);
+
+
+    message.innerHTML = `
+
+      <div class="alert error">
+
+        ${escapeHtml(
+          error.message
+        )}
+
+      </div>
+
+    `;
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "Backup তৈরি করুন";
+
+  }
+
+}
+
+
+async function restoreBackup() {
+
+  const input =
+    document.getElementById(
+      "restoreFile"
+    );
+
+
+  const message =
+    document.getElementById(
+      "restoreMessage"
+    );
+
+
+  const button =
+    document.getElementById(
+      "restoreBackupBtn"
+    );
+
+
+  if (!input?.files?.length) {
+
+    message.innerHTML = `
+
+      <div class="alert error">
+
+        আগে একটি backup file নির্বাচন করুন।
+
+      </div>
+
+    `;
+
+    return;
+
+  }
+
+
+  const file =
+    input.files[0];
+
+
+  try {
+
+    const text =
+      await file.text();
+
+
+    let backup;
+
+
+    try {
+
+      backup =
+        JSON.parse(text);
+
+    } catch {
+
+      throw new Error(
+        "Backup file বৈধ JSON নয়।"
+      );
+
+    }
+
+
+    const confirmed =
+      confirm(
+        "সতর্কতা: Restore করলে বর্তমান database data পরিবর্তিত হতে পারে। আপনি কি নিশ্চিত?"
+      );
+
+
+    if (!confirmed) {
+
+      return;
+
+    }
+
+
+    button.disabled = true;
+
+    button.textContent =
+      "Restore হচ্ছে...";
+
+
+    const response =
+      await apiFetch(
+        "/api/system/restore",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body:
+            JSON.stringify(
+              backup
+            )
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Restore failed"
+      );
+
+    }
+
+
+    message.innerHTML = `
+
+      <div class="alert success">
+
+        Backup সফলভাবে restore হয়েছে।
+
+      </div>
+
+    `;
+
+
+  } catch (error) {
+
+    console.error(error);
+
+
+    message.innerHTML = `
+
+      <div class="alert error">
+
+        ${escapeHtml(
+          error.message
+        )}
+
+      </div>
+
+    `;
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "Backup Restore";
+
+  }
+
+}
+
+
+// ============================================================
+// STEP 12 — DASHBOARD + REPORTS
+// ============================================================
+
+async function renderDashboard() {
+
+  app.innerHTML = `
+
+    <section class="page-header">
+
+      <div>
+
+        <h2>
+          Dashboard
+        </h2>
+
+        <p>
+          দোকানের বর্তমান হিসাবের সারসংক্ষেপ
+        </p>
+
+      </div>
+
+
+      <div class="toolbar">
+
+        <input
+          type="date"
+          id="dashboardFrom"
+          value="${todayDate()}"
+        >
+
+        <input
+          type="date"
+          id="dashboardTo"
+          value="${todayDate()}"
+        >
+
+        <button
+          id="dashboardRefreshBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          Refresh
+        </button>
+
+      </div>
+
+    </section>
+
+
+    <div
+      id="dashboardContent"
+      class="dashboard-content"
+    >
+
+      <div class="loading">
+        Dashboard loading...
+      </div>
+
+    </div>
+
+  `;
+
+
+  document
+    .getElementById(
+      "dashboardRefreshBtn"
+    )
+    ?.addEventListener(
+      "click",
+      loadDashboard
+    );
+
+
+  await loadDashboard();
+
+}
+
+
+async function loadDashboard() {
+
+  const container =
+    document.getElementById(
+      "dashboardContent"
+    );
+
+
+  if (!container) return;
+
+
+  const from =
+    document.getElementById(
+      "dashboardFrom"
+    )?.value ||
+    todayDate();
+
+
+  const to =
+    document.getElementById(
+      "dashboardTo"
+    )?.value ||
+    todayDate();
+
+
+  container.innerHTML = `
+
+    <div class="loading">
+      Dashboard loading...
+    </div>
+
+  `;
+
+
+  try {
+
+    const response =
+      await apiFetch(
+        `/api/dashboard?from=${encodeURIComponent(
+          from
+        )}&to=${encodeURIComponent(
+          to
+        )}`
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Dashboard load failed"
+      );
+
+    }
+
+
+    renderDashboardData(
+      data
+    );
+
+
+  } catch (error) {
+
+    console.error(error);
+
+
+    container.innerHTML = `
+
+      <div class="error-state">
+
+        ${escapeHtml(
+          error.message ||
+          "Dashboard load failed"
+        )}
+
+      </div>
+
+    `;
+
+  }
+
+}
+
+
+function renderDashboardData(
+  data
+) {
+
+  const container =
+    document.getElementById(
+      "dashboardContent"
+    );
+
+
+  if (!container) return;
+
+
+  const summary =
+    data.summary ||
+    data;
+
+
+  const sales =
+    Number(
+      summary.sales ||
+      summary.total_sales ||
+      0
+    );
+
+
+  const purchases =
+    Number(
+      summary.purchases ||
+      summary.total_purchases ||
+      0
+    );
+
+
+  const grossProfit =
+    Number(
+      summary.gross_profit ||
+      0
+    );
+
+
+  const netProfit =
+    Number(
+      summary.net_profit ||
+      0
+    );
+
+
+  const customerDue =
+    Number(
+      summary.customer_due ||
+      summary.total_customer_due ||
+      0
+    );
+
+
+  const supplierDue =
+    Number(
+      summary.supplier_due ||
+      summary.total_supplier_due ||
+      0
+    );
+
+
+  const stockValue =
+    Number(
+      summary.stock_value ||
+      0
+    );
+
+
+  const productCount =
+    Number(
+      summary.product_count ||
+      0
+    );
+
+
+  container.innerHTML = `
+
+    <div class="summary-grid">
+
+      <div class="summary-card">
+
+        <span>
+          Sales
+        </span>
+
+        <strong>
+          ৳${formatMoney(sales)}
+        </strong>
+
+      </div>
+
+
+      <div class="summary-card">
+
+        <span>
+          Purchase
+        </span>
+
+        <strong>
+          ৳${formatMoney(purchases)}
+        </strong>
+
+      </div>
+
+
+      <div class="summary-card">
+
+        <span>
+          Gross Profit
+        </span>
+
+        <strong>
+          ৳${formatMoney(grossProfit)}
+        </strong>
+
+      </div>
+
+
+      <div class="summary-card">
+
+        <span>
+          Net Profit
+        </span>
+
+        <strong>
+          ৳${formatMoney(netProfit)}
+        </strong>
+
+      </div>
+
+
+      <div class="summary-card">
+
+        <span>
+          Customer Due
+        </span>
+
+        <strong>
+          ৳${formatMoney(customerDue)}
+        </strong>
+
+      </div>
+
+
+      <div class="summary-card">
+
+        <span>
+          Supplier Due
+        </span>
+
+        <strong>
+          ৳${formatMoney(supplierDue)}
+        </strong>
+
+      </div>
+
+
+      <div class="summary-card">
+
+        <span>
+          Stock Value
+        </span>
+
+        <strong>
+          ৳${formatMoney(stockValue)}
+        </strong>
+
+      </div>
+
+
+      <div class="summary-card">
+
+        <span>
+          Products
+        </span>
+
+        <strong>
+          ${formatNumber(productCount)}
+        </strong>
+
+      </div>
+
+    </div>
+
+
+    <div class="dashboard-grid">
+
+      <div class="card">
+
+        <h3>
+          Account Balance
+        </h3>
+
+        <div id="dashboardAccounts">
+          Loading...
+        </div>
+
+      </div>
+
+
+      <div class="card">
+
+        <h3>
+          Low Stock
+        </h3>
+
+        <div id="dashboardLowStock">
+          Loading...
+        </div>
+
+      </div>
+
+    </div>
+
+
+    <div class="card">
+
+      <h3>
+        Top Products
+      </h3>
+
+      <div id="dashboardTopProducts">
+        Loading...
+      </div>
+
+    </div>
+
+
+    <div class="card">
+
+      <h3>
+        Recent Transactions
+      </h3>
+
+      <div id="dashboardRecentTransactions">
+        Loading...
+      </div>
+
+    </div>
+
+  `;
+
+
+  renderDashboardAccounts(
+    data.accounts || []
+  );
+
+
+  renderDashboardLowStock(
+    data.low_stock ||
+    data.lowStock ||
+    []
+  );
+
+
+  renderDashboardTopProducts(
+    data.top_products ||
+    data.topProducts ||
+    []
+  );
+
+
+  renderDashboardRecentTransactions(
+    data.recent_transactions ||
+    data.recentTransactions ||
+    []
+  );
+
+}
+
+
+function renderDashboardAccounts(
+  accounts
+) {
+
+  const container =
+    document.getElementById(
+      "dashboardAccounts"
+    );
+
+
+  if (!container) return;
+
+
+  if (!accounts.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো account data নেই।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+
+            <th>
+              Account
+            </th>
+
             <th class="text-right">
               Balance
             </th>
@@ -7097,21 +16061,13 @@ function accountTableHtml(accounts) {
             <tr>
 
               <td>
-                <strong>
-                  ${escapeHtml(
-                    account.name
-                  )}
-                </strong>
-              </td>
-
-              <td>
                 ${escapeHtml(
-                  account.type || "-"
+                  account.name || ""
                 )}
               </td>
 
               <td class="text-right">
-                ৳${money(
+                ৳${formatMoney(
                   account.current_balance ??
                   account.balance ??
                   0
@@ -7133,1109 +16089,347 @@ function accountTableHtml(accounts) {
 }
 
 
-/* =========================================================
-   STOCK VERIFICATION
-   ========================================================= */
-
-async function loadStockVerification() {
-
-  const data =
-    await api(
-      "/api/stock-verification"
-    );
-
-  return data;
-
-}
-
-
-async function renderStockVerification() {
-
-  try {
-
-    showLoading(
-      "স্টক ভেলু যাচাইয়ের তথ্য লোড হচ্ছে..."
-    );
-
-
-    const data =
-      await loadStockVerification();
-
-
-    const rows =
-      Array.isArray(data)
-        ? data
-        : data.items || data.products || [];
-
-
-    pageContent.innerHTML = `
-
-      <div class="card">
-
-        <div class="card-header">
-
-          <h3>
-            স্টক ভেলু যাচাই
-          </h3>
-
-          <span class="badge badge-info">
-            Physical Qty শুধু যাচাইয়ের জন্য
-          </span>
-
-        </div>
-
-
-        <div class="card-body">
-
-          <div class="table-wrapper">
-
-            <table class="data-table">
-
-              <thead>
-
-                <tr>
-
-                  <th>পণ্য</th>
-
-                  <th class="text-right">
-                    System Qty
-                  </th>
-
-                  <th class="text-right">
-                    Unit Cost
-                  </th>
-
-                  <th class="text-right">
-                    Expected Value
-                  </th>
-
-                  <th class="text-right">
-                    Physical Qty
-                  </th>
-
-                  <th class="text-right">
-                    Physical Value
-                  </th>
-
-                  <th class="text-right">
-                    Difference
-                  </th>
-
-                </tr>
-
-              </thead>
-
-
-              <tbody>
-
-                ${
-                  rows.length
-                    ? rows.map(row => `
-
-                        <tr>
-
-                          <td>
-                            ${escapeHtml(
-                              row.product_name ||
-                              row.name ||
-                              ""
-                            )}
-                          </td>
-
-                          <td class="text-right">
-                            ${number(
-                              row.system_qty ??
-                              row.current_stock ??
-                              0
-                            )}
-                          </td>
-
-                          <td class="text-right">
-                            ৳${money(
-                              row.unit_cost ??
-                              row.cost ??
-                              0
-                            )}
-                          </td>
-
-                          <td class="text-right">
-                            ৳${money(
-                              row.expected_value ??
-                              0
-                            )}
-                          </td>
-
-                          <td class="text-right">
-                            ${
-                              row.physical_qty ??
-                              "-"
-                            }
-                          </td>
-
-                          <td class="text-right">
-                            ৳${money(
-                              row.physical_value ??
-                              0
-                            )}
-                          </td>
-
-                          <td class="text-right">
-                            ৳${money(
-                              row.difference_value ??
-                              0
-                            )}
-                          </td>
-
-                        </tr>
-
-                      `).join("")
-
-                    : `
-
-                      <tr>
-
-                        <td
-                          colspan="7"
-                          class="text-center"
-                        >
-                          কোনো stock verification data নেই
-                        </td>
-
-                      </tr>
-
-                    `
-                }
-
-              </tbody>
-
-            </table>
-
-          </div>
-
-        </div>
-
-      </div>
-
-    `;
-
-
-  } catch (error) {
-
-    renderError(error);
-
-  } finally {
-
-    hideLoading();
-
-  }
-
-}
-
-
-/* =========================================================
-   SETTINGS
-   ========================================================= */
-
-function renderSettings() {
-
-  pageContent.innerHTML = `
-
-    <div class="card">
-
-      <div class="card-header">
-
-        <h3>
-          সিস্টেম সেটিংস
-        </h3>
-
-      </div>
-
-
-      <div class="card-body">
-
-        <div class="empty-state">
-
-          <div class="icon">
-            ⚙️
-          </div>
-
-          <strong>
-            Settings Module
-          </strong>
-
-          <span>
-            Accounting, backup, restore ও system configuration
-            পরবর্তী ধাপে যুক্ত হবে।
-          </span>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  `;
-
-}
-
-
-/* =========================================================
-   COMING SOON
-   ========================================================= */
-
-function renderComingSoon(title, description) {
-
-  pageContent.innerHTML = `
-
-    <div class="card">
-
-      <div class="card-body">
-
-        <div class="empty-state">
-
-          <div class="icon">
-            🚧
-          </div>
-
-          <strong>
-            ${escapeHtml(title)}
-          </strong>
-
-          <span>
-            ${escapeHtml(description)}
-          </span>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  `;
-
-}
-
-
-/* =========================================================
-   ERROR
-   ========================================================= */
-
-function renderError(error) {
-
-  console.error(error);
-
-
-  pageContent.innerHTML = `
-
-    <div class="card">
-
-      <div class="card-body">
-
-        <div class="empty-state">
-
-          <div class="icon">
-            ⚠️
-          </div>
-
-          <strong>
-            তথ্য লোড করা যায়নি
-          </strong>
-
-          <span>
-            ${escapeHtml(
-              error?.message ||
-              "Unknown error"
-            )}
-          </span>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  `;
-
-}
-
-
-/* =========================================================
-   EVENTS
-   ========================================================= */
-
-document
-  .querySelectorAll(".nav-item")
-  .forEach(item => {
-
-    item.addEventListener(
-      "click",
-      () => {
-
-        navigate(
-          item.dataset.page
-        );
-
-      }
-    );
-
-  });
-
-
-$("#refreshBtn")
-  .addEventListener(
-    "click",
-    () => {
-
-      navigate(
-        state.currentPage
-      );
-
-    }
-  );
-
-
-$("#mobileMenuBtn")
-  .addEventListener(
-    "click",
-    () => {
-
-      sidebar.classList.toggle("open");
-
-    }
-  );
-
-
-/* =========================================================
-   INITIAL LOAD
-   ========================================================= */
-
-navigate("dashboard");
-
-// ============================================================
-// STEP 11 — STOCK VALUE VERIFICATION + STOCK ADJUSTMENT
-// ============================================================
-
-async function renderStockVerification() {
-  app.innerHTML = `
-    <section class="page-header">
-      <div>
-        <h2>স্টক ভেলু যাচাই</h2>
-        <p>সিস্টেম স্টক ও বাস্তব স্টক মিলিয়ে দেখুন</p>
-      </div>
-    </section>
-
-    <div class="card">
-      <div class="form-grid">
-
-        <div class="form-group">
-          <label>যাচাইয়ের তারিখ</label>
-          <input
-            type="date"
-            id="verificationDate"
-            value="${todayDate()}"
-          >
-        </div>
-
-        <div class="form-group">
-          <label>নোট</label>
-          <input
-            type="text"
-            id="verificationNote"
-            placeholder="যেমন: মাসিক স্টক যাচাই"
-          >
-        </div>
-
-      </div>
-
-      <div class="toolbar">
-        <button
-          class="btn btn-primary"
-          id="loadVerificationBtn"
-        >
-          স্টক লোড করুন
-        </button>
-
-        <button
-          class="btn btn-success"
-          id="saveVerificationBtn"
-        >
-          যাচাই সংরক্ষণ
-        </button>
-      </div>
-    </div>
-
-    <div class="card">
-
-      <div class="summary-grid">
-
-        <div class="summary-box">
-          <span>System Stock Value</span>
-          <strong id="systemStockValue">৳0</strong>
-        </div>
-
-        <div class="summary-box">
-          <span>Physical Stock Value</span>
-          <strong id="physicalStockValue">৳0</strong>
-        </div>
-
-        <div class="summary-box">
-          <span>Difference</span>
-          <strong id="stockValueDifference">৳0</strong>
-        </div>
-
-      </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>পণ্য</th>
-              <th>System Qty</th>
-              <th>Unit Cost</th>
-              <th>Expected Value</th>
-              <th>Physical Qty</th>
-              <th>Physical Value</th>
-              <th>Qty Difference</th>
-              <th>Value Difference</th>
-            </tr>
-          </thead>
-
-          <tbody id="verificationTableBody">
-            <tr>
-              <td colspan="8" class="empty-state">
-                স্টক লোড করুন
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-    </div>
-
-    <div class="card">
-
-      <h3>Stock Adjustment</h3>
-
-      <div class="form-grid">
-
-        <div class="form-group">
-          <label>পণ্য</label>
-          <select id="adjustmentProduct">
-            <option value="">পণ্য নির্বাচন করুন</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Adjustment Quantity</label>
-          <input
-            type="number"
-            id="adjustmentQty"
-            step="0.001"
-            placeholder="যেমন: -2 অথবা 5"
-          >
-        </div>
-
-        <div class="form-group">
-          <label>কারণ</label>
-          <input
-            type="text"
-            id="adjustmentReason"
-            placeholder="যেমন: Physical stock shortage"
-          >
-        </div>
-
-      </div>
-
-      <button
-        class="btn btn-warning"
-        id="saveAdjustmentBtn"
-      >
-        Stock Adjustment Save
-      </button>
-
-    </div>
-  `;
-
-  await bindStockVerification();
-}
-
-
-async function bindStockVerification() {
-
-  const loadBtn = document.getElementById(
-    "loadVerificationBtn"
-  );
-
-  const saveBtn = document.getElementById(
-    "saveVerificationBtn"
-  );
-
-  const adjustmentBtn = document.getElementById(
-    "saveAdjustmentBtn"
-  );
-
-  loadBtn.addEventListener(
-    "click",
-    loadVerificationStock
-  );
-
-  saveBtn.addEventListener(
-    "click",
-    saveStockVerification
-  );
-
-  adjustmentBtn.addEventListener(
-    "click",
-    saveStockAdjustment
-  );
-
-  await loadProducts();
-
-  populateAdjustmentProducts();
-}
-
-
-function populateAdjustmentProducts() {
-
-  const select = document.getElementById(
-    "adjustmentProduct"
-  );
-
-  if (!select) return;
-
-  select.innerHTML = `
-    <option value="">পণ্য নির্বাচন করুন</option>
-    ${productsCache.map(product => `
-      <option value="${product.id}">
-        ${escapeHtml(product.name)}
-      </option>
-    `).join("")}
-  `;
-}
-
-
-async function loadVerificationStock() {
-
-  const tbody = document.getElementById(
-    "verificationTableBody"
-  );
-
-  tbody.innerHTML = `
-    <tr>
-      <td colspan="8" class="empty-state">
-        স্টক লোড হচ্ছে...
-      </td>
-    </tr>
-  `;
-
-  try {
-
-    const response = await apiFetch(
-      "/api/stock-verification"
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        "স্টক ডাটা লোড করা যায়নি"
-      );
-    }
-
-    const data = await response.json();
-
-    const rows = data.items || data.products || [];
-
-    if (!rows.length) {
-
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="8" class="empty-state">
-            কোনো স্টক পাওয়া যায়নি
-          </td>
-        </tr>
-      `;
-
-      return;
-    }
-
-    tbody.innerHTML = rows.map((item, index) => {
-
-      const systemQty = Number(
-        item.current_stock ?? item.system_qty ?? 0
-      );
-
-      const unitCost = Number(
-        item.unit_cost ?? item.last_unit_cost ?? 0
-      );
-
-      const expectedValue =
-        systemQty * unitCost;
-
-      return `
-        <tr
-          data-product-id="${item.id}"
-          data-unit-cost="${unitCost}"
-        >
-
-          <td>
-            ${escapeHtml(item.name || "")}
-          </td>
-
-          <td class="system-qty">
-            ${formatNumber(systemQty)}
-          </td>
-
-          <td>
-            ${formatMoney(unitCost)}
-          </td>
-
-          <td>
-            ${formatMoney(expectedValue)}
-          </td>
-
-          <td>
-            <input
-              type="number"
-              class="physical-qty"
-              step="0.001"
-              min="0"
-              value="${systemQty}"
-            >
-          </td>
-
-          <td class="physical-value">
-            ${formatMoney(expectedValue)}
-          </td>
-
-          <td class="qty-difference">
-            0
-          </td>
-
-          <td class="value-difference">
-            ${formatMoney(0)}
-          </td>
-
-        </tr>
-      `;
-
-    }).join("");
-
-    document
-      .querySelectorAll(".physical-qty")
-      .forEach(input => {
-
-        input.addEventListener(
-          "input",
-          updateVerificationRow
-        );
-
-      });
-
-    updateVerificationSummary();
-
-  } catch (error) {
-
-    console.error(error);
-
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="8" class="error-state">
-          ${escapeHtml(error.message)}
-        </td>
-      </tr>
-    `;
-  }
-}
-
-
-function updateVerificationRow(event) {
-
-  const input = event.target;
-
-  const row = input.closest("tr");
-
-  const systemQty = Number(
-    row.querySelector(".system-qty")
-      ?.textContent
-      ?.replace(/,/g, "") || 0
-  );
-
-  const unitCost = Number(
-    row.dataset.unitCost || 0
-  );
-
-  const physicalQty = Number(
-    input.value || 0
-  );
-
-  const physicalValue =
-    physicalQty * unitCost;
-
-  const qtyDifference =
-    physicalQty - systemQty;
-
-  const valueDifference =
-    physicalValue -
-    (systemQty * unitCost);
-
-  row.querySelector(
-    ".physical-value"
-  ).textContent =
-    formatMoney(physicalValue);
-
-  row.querySelector(
-    ".qty-difference"
-  ).textContent =
-    formatNumber(qtyDifference);
-
-  row.querySelector(
-    ".value-difference"
-  ).textContent =
-    formatMoney(valueDifference);
-
-  updateVerificationSummary();
-}
-
-
-function updateVerificationSummary() {
-
-  let systemValue = 0;
-  let physicalValue = 0;
-
-  document
-    .querySelectorAll(
-      "#verificationTableBody tr[data-product-id]"
-    )
-    .forEach(row => {
-
-      const systemQty = Number(
-        row.querySelector(".system-qty")
-          ?.textContent
-          ?.replace(/,/g, "") || 0
-      );
-
-      const unitCost = Number(
-        row.dataset.unitCost || 0
-      );
-
-      const physicalQty = Number(
-        row.querySelector(".physical-qty")
-          ?.value || 0
-      );
-
-      systemValue +=
-        systemQty * unitCost;
-
-      physicalValue +=
-        physicalQty * unitCost;
-
-    });
-
-  const difference =
-    physicalValue - systemValue;
-
-  document.getElementById(
-    "systemStockValue"
-  ).textContent =
-    formatMoney(systemValue);
-
-  document.getElementById(
-    "physicalStockValue"
-  ).textContent =
-    formatMoney(physicalValue);
-
-  document.getElementById(
-    "stockValueDifference"
-  ).textContent =
-    formatMoney(difference);
-}
-
-
-async function saveStockVerification() {
-
-  const rows = [
-    ...document.querySelectorAll(
-      "#verificationTableBody tr[data-product-id]"
-    )
-  ];
-
-  if (!rows.length) {
-
-    alert("আগে স্টক লোড করুন।");
-
-    return;
-  }
-
-  const items = rows.map(row => {
-
-    const physicalQty = Number(
-      row.querySelector(".physical-qty")
-        ?.value || 0
-    );
-
-    return {
-      product_id: Number(
-        row.dataset.productId
-      ),
-      physical_qty: physicalQty
-    };
-
-  });
-
-  const payload = {
-
-    verification_date:
-      document.getElementById(
-        "verificationDate"
-      ).value,
-
-    note:
-      document.getElementById(
-        "verificationNote"
-      ).value.trim(),
-
-    items
-
-  };
-
-  try {
-
-    const response = await apiFetch(
-      "/api/stock-verification",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key":
-            crypto.randomUUID()
-        },
-        body: JSON.stringify(payload)
-      }
-    );
-
-    const result =
-      await response.json();
-
-    if (!response.ok) {
-
-      throw new Error(
-        result.error ||
-        "Stock verification save failed"
-      );
-    }
-
-    alert(
-      "স্টক ভেলু যাচাই সংরক্ষণ হয়েছে।"
-    );
-
-  } catch (error) {
-
-    console.error(error);
-
-    alert(error.message);
-
-  }
-}
-
-
-async function saveStockAdjustment() {
-
-  const productId = Number(
-    document.getElementById(
-      "adjustmentProduct"
-    ).value
-  );
-
-  const quantity = Number(
-    document.getElementById(
-      "adjustmentQty"
-    ).value
-  );
-
-  const reason =
-    document.getElementById(
-      "adjustmentReason"
-    ).value.trim();
-
-  if (!productId) {
-
-    alert("পণ্য নির্বাচন করুন।");
-
-    return;
-  }
-
-  if (!Number.isFinite(quantity) || quantity === 0) {
-
-    alert(
-      "Adjustment Quantity 0 হতে পারবে না।"
-    );
-
-    return;
-  }
-
-  if (!reason) {
-
-    alert("Adjustment-এর কারণ লিখুন।");
-
-    return;
-  }
-
-  try {
-
-    const response = await apiFetch(
-      "/api/transactions/stock-adjustment",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key":
-            crypto.randomUUID()
-        },
-        body: JSON.stringify({
-
-          product_id: productId,
-
-          quantity,
-
-          reason,
-
-          adjustment_date:
-            document.getElementById(
-              "verificationDate"
-            )?.value || todayDate()
-
-        })
-      }
-    );
-
-    const result =
-      await response.json();
-
-    if (!response.ok) {
-
-      throw new Error(
-        result.error ||
-        "Stock adjustment failed"
-      );
-    }
-
-    alert(
-      "Stock Adjustment সফলভাবে সংরক্ষণ হয়েছে।"
-    );
-
-    document.getElementById(
-      "adjustmentQty"
-    ).value = "";
-
-    document.getElementById(
-      "adjustmentReason"
-    ).value = "";
-
-    await loadProducts();
-
-    populateAdjustmentProducts();
-
-    await loadVerificationStock();
-
-  } catch (error) {
-
-    console.error(error);
-
-    alert(error.message);
-
-  }
-}
-
-// ============================================================
-// STEP 13 — SETTINGS UI
-// ============================================================
-
-async function renderSettings() {
-
-  app.innerHTML = `
-    <section class="page-header">
-
-      <div>
-        <h2>⚙️ Settings</h2>
-        <p>দোকানের system configuration</p>
-      </div>
-
-    </section>
-
-
-    <div class="card">
-
-      <h3>System Settings</h3>
-
-      <div id="settingsContainer">
-        সেটিংস লোড হচ্ছে...
-      </div>
-
-    </div>
-  `;
-
-
-  try {
-
-    const response =
-      await apiFetch(
-        "/api/settings"
-      );
-
-    const data =
-      await response.json();
-
-
-    if (!response.ok) {
-      throw new Error(
-        data.error ||
-        "Settings load failed"
-      );
-    }
-
-
-    renderSettingsForm(
-      data.settings || []
-    );
-
-  } catch (error) {
-
-    console.error(error);
-
-    document.getElementById(
-      "settingsContainer"
-    ).innerHTML = `
-      <div class="error-state">
-        ${escapeHtml(error.message)}
-      </div>
-    `;
-  }
-}
-
-
-function renderSettingsForm(
-  settings
+function renderDashboardLowStock(
+  products
 ) {
 
   const container =
     document.getElementById(
-      "settingsContainer"
+      "dashboardLowStock"
     );
 
 
-  if (!settings.length) {
+  if (!container) return;
+
+
+  if (!products.length) {
 
     container.innerHTML = `
+
       <div class="empty-state">
-        কোনো setting পাওয়া যায়নি।
+
+        সব পণ্যের stock স্বাভাবিক আছে।
+
       </div>
+
     `;
 
     return;
   }
 
 
-  container.innerHTML =
-    settings.map(setting => `
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+
+            <th>
+              Product
+            </th>
+
+            <th>
+              Stock
+            </th>
+
+            <th>
+              Low Level
+            </th>
+
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${products.map(product => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  product.name || ""
+                )}
+              </td>
+
+              <td>
+                ${formatNumber(
+                  product.current_stock || 0
+                )}
+              </td>
+
+              <td>
+                ${formatNumber(
+                  product.low_stock_level || 0
+                )}
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  `;
+
+}
+
+
+function renderDashboardTopProducts(
+  products
+) {
+
+  const container =
+    document.getElementById(
+      "dashboardTopProducts"
+    );
+
+
+  if (!container) return;
+
+
+  if (!products.length) {
+
+    container.innerHTML = `
+
+      <div class="empty-state">
+        কোনো sales product data নেই।
+      </div>
+
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+
+            <th>
+              Product
+            </th>
+
+            <th>
+              Qty
+            </th>
+
+            <th>
+              Sales
+            </th>
+
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${products.map(product => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  product.name || ""
+                )}
+              </td>
+
+              <td>
+                ${formatNumber(
+                  product.quantity ||
+                  product.qty ||
+                  0
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  product.sales ||
+                  product.total_sales ||
+                  0
+                )}
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  `;
+
+}
+
+
+function renderDashboardRecentTransactions(
+  transactions
+) {
+
+  const container =
+    document.getElementById(
+      "dashboardRecentTransactions"
+    );
+
+
+  if (!container) return;
+
+
+  if (!transactions.length) {
+
+    container.innerHTML = `
+
+      <div class="empty-state">
+        কোনো transaction পাওয়া যায়নি।
+      </div>
+
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+
+            <th>
+              Date
+            </th>
+
+            <th>
+              Type
+            </th>
+
+            <th>
+              Reference
+            </th>
+
+            <th class="text-right">
+              Amount
+            </th>
+
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${transactions.map(transaction => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  transaction.transaction_date ||
+                  transaction.date ||
+                  ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  transactionTypeLabel(
+                    transaction.transaction_type ||
+                    transaction.type ||
+                    ""
+                  )
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  transaction.reference ||
+                  ""
+                )}
+              </td>
+
+              <td class="text-right">
+                ৳${formatMoney(
+                  transaction.total_amount ||
+                  transaction.amount ||
+                  0
+                )}
+              </td>
+
+            </tr>
+
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  `;
+
+}
+
+
+function transactionTypeLabel(
+  type
+) {
+
+  const labels = {
+
+    PURCHASE:
+      "ক্রয়",
+
+    SALE:
+      "বিক্রয়",
+
+    CUSTOMER_COLLECTION:
+      "Customer Collection",
+
+    SUPPLIER_PAYMENT:
+      "Supplier Payment",
+
+    EXPENSE:
+      "খরচ",
+
+    OTHER_INCOME:
+      "অন্যান্য আয়",
+
+    STOCK_ADJUSTMENT:
+      "Stock Adjustment",
+
+    ACCOUNT_TRANSFER:
+      "Account Transfer"
+
+  };
+
+
+  return (
+    labels[type] ||
+    type ||
+    "-"
+  );
+
+}
       <div class="setting-row">
 
         <label>
