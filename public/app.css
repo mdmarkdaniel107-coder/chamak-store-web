@@ -1098,3 +1098,52 @@ textarea.form-control {
   }
 
 }
+
+/* ============================================================
+   STEP 13 — SETTINGS / AUDIT / BACKUP
+   ============================================================ */
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 14px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.setting-row > label {
+  font-weight: 600;
+  min-width: 220px;
+}
+
+.setting-control {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+
+.setting-control input {
+  flex: 1;
+}
+
+@media (max-width: 600px) {
+
+  .setting-row {
+    display: block;
+  }
+
+  .setting-row > label {
+    display: block;
+    margin-bottom: 8px;
+    min-width: 0;
+  }
+
+  .setting-control {
+    display: flex;
+    flex-direction: column;
+  }
+
+}
+
+
