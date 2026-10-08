@@ -1,1 +1,21 @@
 
+{
+  "name": "chamak-store-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CHAMAK STORE business accounting web application using Cloudflare Workers and D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply chamak-store-db --local",
+    "db:remote": "wrangler d1 migrations apply chamak-store-db --remote",
+    "check": "node --check src/index.js",
+    "check:engine": "node --check src/services/transactionEngine.js",
+    "check:master": "node --check src/services/masterDataService.js",
+    "check:system": "node --check src/services/systemService.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
