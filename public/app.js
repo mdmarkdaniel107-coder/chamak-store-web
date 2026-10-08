@@ -304,6 +304,10 @@ async function navigate(page) {
 
     case "transfer":
      await renderAccountTransfer();
+     break; 
+        
+    case "stock-verification":
+     await renderStockVerification();
      break;    
 
     case "accounts":
@@ -7390,3 +7394,637 @@ $("#mobileMenuBtn")
    ========================================================= */
 
 navigate("dashboard");
+
+// ============================================================
+// STEP 11 — STOCK VALUE VERIFICATION + STOCK ADJUSTMENT
+// ============================================================
+
+async function renderStockVerification() {
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h2>স্টক ভেলু যাচাই</h2>
+        <p>সিস্টেম স্টক ও বাস্তব স্টক মিলিয়ে দেখুন</p>
+      </div>
+    </section>
+
+    <div class="card">
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>যাচাইয়ের তারিখ</label>
+          <input
+            type="date"
+            id="verificationDate"
+            value="${todayDate()}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>নোট</label>
+          <input
+            type="text"
+            id="verificationNote"
+            placeholder="যেমন: মাসিক স্টক যাচাই"
+          >
+        </div>
+
+      </div>
+
+      <div class="toolbar">
+        <button
+          class="btn btn-primary"
+          id="loadVerificationBtn"
+        >
+          স্টক লোড করুন
+        </button>
+
+        <button
+          class="btn btn-success"
+          id="saveVerificationBtn"
+        >
+          যাচাই সংরক্ষণ
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+
+      <div class="summary-grid">
+
+        <div class="summary-box">
+          <span>System Stock Value</span>
+          <strong id="systemStockValue">৳0</strong>
+        </div>
+
+        <div class="summary-box">
+          <span>Physical Stock Value</span>
+          <strong id="physicalStockValue">৳0</strong>
+        </div>
+
+        <div class="summary-box">
+          <span>Difference</span>
+          <strong id="stockValueDifference">৳0</strong>
+        </div>
+
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>পণ্য</th>
+              <th>System Qty</th>
+              <th>Unit Cost</th>
+              <th>Expected Value</th>
+              <th>Physical Qty</th>
+              <th>Physical Value</th>
+              <th>Qty Difference</th>
+              <th>Value Difference</th>
+            </tr>
+          </thead>
+
+          <tbody id="verificationTableBody">
+            <tr>
+              <td colspan="8" class="empty-state">
+                স্টক লোড করুন
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <div class="card">
+
+      <h3>Stock Adjustment</h3>
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>পণ্য</label>
+          <select id="adjustmentProduct">
+            <option value="">পণ্য নির্বাচন করুন</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Adjustment Quantity</label>
+          <input
+            type="number"
+            id="adjustmentQty"
+            step="0.001"
+            placeholder="যেমন: -2 অথবা 5"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>কারণ</label>
+          <input
+            type="text"
+            id="adjustmentReason"
+            placeholder="যেমন: Physical stock shortage"
+          >
+        </div>
+
+      </div>
+
+      <button
+        class="btn btn-warning"
+        id="saveAdjustmentBtn"
+      >
+        Stock Adjustment Save
+      </button>
+
+    </div>
+  `;
+
+  await bindStockVerification();
+}
+
+
+async function bindStockVerification() {
+
+  const loadBtn = document.getElementById(
+    "loadVerificationBtn"
+  );
+
+  const saveBtn = document.getElementById(
+    "saveVerificationBtn"
+  );
+
+  const adjustmentBtn = document.getElementById(
+    "saveAdjustmentBtn"
+  );
+
+  loadBtn.addEventListener(
+    "click",
+    loadVerificationStock
+  );
+
+  saveBtn.addEventListener(
+    "click",
+    saveStockVerification
+  );
+
+  adjustmentBtn.addEventListener(
+    "click",
+    saveStockAdjustment
+  );
+
+  await loadProducts();
+
+  populateAdjustmentProducts();
+}
+
+
+function populateAdjustmentProducts() {
+
+  const select = document.getElementById(
+    "adjustmentProduct"
+  );
+
+  if (!select) return;
+
+  select.innerHTML = `
+    <option value="">পণ্য নির্বাচন করুন</option>
+    ${productsCache.map(product => `
+      <option value="${product.id}">
+        ${escapeHtml(product.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+async function loadVerificationStock() {
+
+  const tbody = document.getElementById(
+    "verificationTableBody"
+  );
+
+  tbody.innerHTML = `
+    <tr>
+      <td colspan="8" class="empty-state">
+        স্টক লোড হচ্ছে...
+      </td>
+    </tr>
+  `;
+
+  try {
+
+    const response = await apiFetch(
+      "/api/stock-verification"
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        "স্টক ডাটা লোড করা যায়নি"
+      );
+    }
+
+    const data = await response.json();
+
+    const rows = data.items || data.products || [];
+
+    if (!rows.length) {
+
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="8" class="empty-state">
+            কোনো স্টক পাওয়া যায়নি
+          </td>
+        </tr>
+      `;
+
+      return;
+    }
+
+    tbody.innerHTML = rows.map((item, index) => {
+
+      const systemQty = Number(
+        item.current_stock ?? item.system_qty ?? 0
+      );
+
+      const unitCost = Number(
+        item.unit_cost ?? item.last_unit_cost ?? 0
+      );
+
+      const expectedValue =
+        systemQty * unitCost;
+
+      return `
+        <tr
+          data-product-id="${item.id}"
+          data-unit-cost="${unitCost}"
+        >
+
+          <td>
+            ${escapeHtml(item.name || "")}
+          </td>
+
+          <td class="system-qty">
+            ${formatNumber(systemQty)}
+          </td>
+
+          <td>
+            ${formatMoney(unitCost)}
+          </td>
+
+          <td>
+            ${formatMoney(expectedValue)}
+          </td>
+
+          <td>
+            <input
+              type="number"
+              class="physical-qty"
+              step="0.001"
+              min="0"
+              value="${systemQty}"
+            >
+          </td>
+
+          <td class="physical-value">
+            ${formatMoney(expectedValue)}
+          </td>
+
+          <td class="qty-difference">
+            0
+          </td>
+
+          <td class="value-difference">
+            ${formatMoney(0)}
+          </td>
+
+        </tr>
+      `;
+
+    }).join("");
+
+    document
+      .querySelectorAll(".physical-qty")
+      .forEach(input => {
+
+        input.addEventListener(
+          "input",
+          updateVerificationRow
+        );
+
+      });
+
+    updateVerificationSummary();
+
+  } catch (error) {
+
+    console.error(error);
+
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="8" class="error-state">
+          ${escapeHtml(error.message)}
+        </td>
+      </tr>
+    `;
+  }
+}
+
+
+function updateVerificationRow(event) {
+
+  const input = event.target;
+
+  const row = input.closest("tr");
+
+  const systemQty = Number(
+    row.querySelector(".system-qty")
+      ?.textContent
+      ?.replace(/,/g, "") || 0
+  );
+
+  const unitCost = Number(
+    row.dataset.unitCost || 0
+  );
+
+  const physicalQty = Number(
+    input.value || 0
+  );
+
+  const physicalValue =
+    physicalQty * unitCost;
+
+  const qtyDifference =
+    physicalQty - systemQty;
+
+  const valueDifference =
+    physicalValue -
+    (systemQty * unitCost);
+
+  row.querySelector(
+    ".physical-value"
+  ).textContent =
+    formatMoney(physicalValue);
+
+  row.querySelector(
+    ".qty-difference"
+  ).textContent =
+    formatNumber(qtyDifference);
+
+  row.querySelector(
+    ".value-difference"
+  ).textContent =
+    formatMoney(valueDifference);
+
+  updateVerificationSummary();
+}
+
+
+function updateVerificationSummary() {
+
+  let systemValue = 0;
+  let physicalValue = 0;
+
+  document
+    .querySelectorAll(
+      "#verificationTableBody tr[data-product-id]"
+    )
+    .forEach(row => {
+
+      const systemQty = Number(
+        row.querySelector(".system-qty")
+          ?.textContent
+          ?.replace(/,/g, "") || 0
+      );
+
+      const unitCost = Number(
+        row.dataset.unitCost || 0
+      );
+
+      const physicalQty = Number(
+        row.querySelector(".physical-qty")
+          ?.value || 0
+      );
+
+      systemValue +=
+        systemQty * unitCost;
+
+      physicalValue +=
+        physicalQty * unitCost;
+
+    });
+
+  const difference =
+    physicalValue - systemValue;
+
+  document.getElementById(
+    "systemStockValue"
+  ).textContent =
+    formatMoney(systemValue);
+
+  document.getElementById(
+    "physicalStockValue"
+  ).textContent =
+    formatMoney(physicalValue);
+
+  document.getElementById(
+    "stockValueDifference"
+  ).textContent =
+    formatMoney(difference);
+}
+
+
+async function saveStockVerification() {
+
+  const rows = [
+    ...document.querySelectorAll(
+      "#verificationTableBody tr[data-product-id]"
+    )
+  ];
+
+  if (!rows.length) {
+
+    alert("আগে স্টক লোড করুন।");
+
+    return;
+  }
+
+  const items = rows.map(row => {
+
+    const physicalQty = Number(
+      row.querySelector(".physical-qty")
+        ?.value || 0
+    );
+
+    return {
+      product_id: Number(
+        row.dataset.productId
+      ),
+      physical_qty: physicalQty
+    };
+
+  });
+
+  const payload = {
+
+    verification_date:
+      document.getElementById(
+        "verificationDate"
+      ).value,
+
+    note:
+      document.getElementById(
+        "verificationNote"
+      ).value.trim(),
+
+    items
+
+  };
+
+  try {
+
+    const response = await apiFetch(
+      "/api/stock-verification",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key":
+            crypto.randomUUID()
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    const result =
+      await response.json();
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Stock verification save failed"
+      );
+    }
+
+    alert(
+      "স্টক ভেলু যাচাই সংরক্ষণ হয়েছে।"
+    );
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(error.message);
+
+  }
+}
+
+
+async function saveStockAdjustment() {
+
+  const productId = Number(
+    document.getElementById(
+      "adjustmentProduct"
+    ).value
+  );
+
+  const quantity = Number(
+    document.getElementById(
+      "adjustmentQty"
+    ).value
+  );
+
+  const reason =
+    document.getElementById(
+      "adjustmentReason"
+    ).value.trim();
+
+  if (!productId) {
+
+    alert("পণ্য নির্বাচন করুন।");
+
+    return;
+  }
+
+  if (!Number.isFinite(quantity) || quantity === 0) {
+
+    alert(
+      "Adjustment Quantity 0 হতে পারবে না।"
+    );
+
+    return;
+  }
+
+  if (!reason) {
+
+    alert("Adjustment-এর কারণ লিখুন।");
+
+    return;
+  }
+
+  try {
+
+    const response = await apiFetch(
+      "/api/transactions/stock-adjustment",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key":
+            crypto.randomUUID()
+        },
+        body: JSON.stringify({
+
+          product_id: productId,
+
+          quantity,
+
+          reason,
+
+          adjustment_date:
+            document.getElementById(
+              "verificationDate"
+            )?.value || todayDate()
+
+        })
+      }
+    );
+
+    const result =
+      await response.json();
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Stock adjustment failed"
+      );
+    }
+
+    alert(
+      "Stock Adjustment সফলভাবে সংরক্ষণ হয়েছে।"
+    );
+
+    document.getElementById(
+      "adjustmentQty"
+    ).value = "";
+
+    document.getElementById(
+      "adjustmentReason"
+    ).value = "";
+
+    await loadProducts();
+
+    populateAdjustmentProducts();
+
+    await loadVerificationStock();
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(error.message);
+
+  }
+}
