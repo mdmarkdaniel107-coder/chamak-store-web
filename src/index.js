@@ -1,30 +1,380 @@
+// CHAMAK STORE
+// Cloudflare Worker API Foundation
+// Step 0005
+
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    if (url.pathname === '/api/health') return Response.json({ok:true, app:'CHAMAK STORE', database:'D1'});
-    if (url.pathname === '/api/dashboard') return dashboard(env.DB);
-    if (url.pathname === '/api/products' && request.method === 'GET') return rows(env.DB, 'SELECT * FROM products ORDER BY name');
-    if (url.pathname === '/api/customers' && request.method === 'GET') return rows(env.DB, 'SELECT * FROM customers ORDER BY name');
-    if (url.pathname === '/api/suppliers' && request.method === 'GET') return rows(env.DB, 'SELECT * FROM suppliers ORDER BY name');
-    if (url.pathname === '/api/sales' && request.method === 'GET') return rows(env.DB, 'SELECT s.*,p.name product_name,c.name customer_name FROM sales s JOIN products p ON p.product_id=s.product_id LEFT JOIN customers c ON c.customer_id=s.customer_id ORDER BY s.date DESC,s.created_at DESC LIMIT 500');
-    if (url.pathname === '/api/purchases' && request.method === 'GET') return rows(env.DB, 'SELECT p.*,pr.name product_name,s.name supplier_name FROM purchases p JOIN products pr ON pr.product_id=p.product_id LEFT JOIN suppliers s ON s.supplier_id=p.supplier_id ORDER BY p.date DESC,p.created_at DESC LIMIT 500');
-    if (url.pathname === '/api/expenses' && request.method === 'GET') return rows(env.DB, 'SELECT * FROM expenses ORDER BY date DESC,created_at DESC LIMIT 500');
-    if (url.pathname === '/api/cash' && request.method === 'GET') return rows(env.DB, 'SELECT * FROM cash_transactions ORDER BY date DESC,created_at DESC LIMIT 500');
-    if (url.pathname === '/api/sales' && request.method === 'POST') return createSale(request, env.DB);
-    if (url.pathname === '/api/purchases' && request.method === 'POST') return createPurchase(request, env.DB);
-    if (url.pathname === '/api/customers' && request.method === 'POST') return createCustomer(request, env.DB);
-    if (url.pathname === '/api/products' && request.method === 'POST') return createProduct(request, env.DB);
-    if (url.pathname === '/api/expenses' && request.method === 'POST') return createExpense(request, env.DB);
-    return new Response('Not found',{status:404});
+    try {
+      const url = new URL(request.url);
+
+      // -----------------------------
+      // CORS
+      // -----------------------------
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: corsHeaders()
+        });
+      }
+
+      // -----------------------------
+      // API Router
+      // -----------------------------
+      if (url.pathname.startsWith("/api/")) {
+        const response = await handleApiRequest(request, env, url);
+
+        return addCors(response);
+      }
+
+      // -----------------------------
+      // Frontend
+      // -----------------------------
+      return env.ASSETS.fetch(request);
+
+    } catch (error) {
+      console.error("Worker Error:", error);
+
+      return json(
+        {
+          success: false,
+          error: "INTERNAL_SERVER_ERROR",
+          message: "সার্ভারে একটি unexpected error হয়েছে।"
+        },
+        500
+      );
+    }
   }
 };
-async function rows(db, sql, ...args){ const r=await db.prepare(sql).bind(...args).all(); return Response.json(r.results); }
-function now(){return new Date().toISOString()}
-function id(prefix){return prefix+'-'+crypto.randomUUID().slice(0,8).toUpperCase()}
-function n(v){return Number(v||0)}
-async function dashboard(db){const q=async s=>(await db.prepare(s).first()); return Response.json({products:await q('SELECT COUNT(*) n FROM products'),stockValue:await q('SELECT COALESCE(SUM(stock_value),0) n FROM products'),customers:await q('SELECT COUNT(*) n FROM customers'),customerDue:await q('SELECT COALESCE(SUM(current_due),0) n FROM customers'),suppliers:await q('SELECT COUNT(*) n FROM suppliers'),supplierDue:await q('SELECT COALESCE(SUM(current_due),0) n FROM suppliers'),todaySales:await q("SELECT COALESCE(SUM(total_sale),0) n FROM sales WHERE date=date('now','localtime') AND status='Active'")});}
-async function createProduct(req,db){const x=await req.json();const t=now();await db.prepare(`INSERT INTO products(product_id,name,category,unit,current_purchase_price,current_sale_price,minimum_stock,current_quantity,stock_value,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(x.product_id||id('P'),x.name,x.category||'',x.unit||'',n(x.current_purchase_price),n(x.current_sale_price),n(x.minimum_stock),n(x.current_quantity),n(x.current_quantity)*n(x.current_purchase_price),x.status||'Active',t,t).run();return Response.json({ok:true},{status:201})}
-async function createCustomer(req,db){const x=await req.json(),t=now();await db.prepare(`INSERT INTO customers(customer_id,name,mobile,address,opening_due,current_due,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`).bind(x.customer_id||id('C'),x.name,x.mobile||'',x.address||'',n(x.opening_due),n(x.opening_due),x.status||'Active',t,t).run();return Response.json({ok:true},{status:201})}
-async function createExpense(req,db){const x=await req.json(),t=now();const eid=x.expense_id||id('E');await db.prepare(`INSERT INTO expenses(expense_id,date,category,description,amount,payment_method,note,status,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(eid,x.date||new Date().toISOString().slice(0,10),x.category||'',x.description||'',n(x.amount),x.payment_method||'Cash',x.note||'', 'Active',t,x.created_by||'web').run();if((x.payment_method||'Cash')==='Cash') await db.prepare(`INSERT INTO cash_transactions(cash_transaction_id,date,reference_id,transaction_type,cash_in,cash_out,payment_method,description,note,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(id('CT'),x.date||new Date().toISOString().slice(0,10),eid,'Expense',0,n(x.amount),'Cash',x.description||'Expense',x.note||'','Active',t).run();return Response.json({ok:true},{status:201})}
-async function createSale(req,db){const x=await req.json(),t=now();const sale=id('S'),qty=n(x.quantity),price=n(x.unit_sale_price),cost=n(x.unit_cost),total=qty*price,cogs=qty*cost,pay=n(x.payment),due=total-pay;const tx=db.batch([db.prepare(`INSERT INTO sales VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(sale,x.date||new Date().toISOString().slice(0,10),x.customer_id||null,x.product_id,qty,price,total,cost,cogs,pay,due,x.payment_method||'Cash',x.note||'','Active',t,x.created_by||'web'),db.prepare(`UPDATE products SET current_quantity=current_quantity-?,stock_value=(current_quantity-?)*current_purchase_price,updated_at=? WHERE product_id=?`).bind(qty,qty,t,x.product_id)]);await tx;return Response.json({ok:true,sale_id:sale},{status:201})}
-async function createPurchase(req,db){const x=await req.json(),t=now();const pid=id('PUR'),qty=n(x.quantity),cost=n(x.unit_cost),total=qty*cost,pay=n(x.payment),due=total-pay;await db.batch([db.prepare(`INSERT INTO purchases VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(pid,x.date||new Date().toISOString().slice(0,10),x.supplier_id||null,x.product_id,qty,cost,total,pay,due,x.payment_method||'Cash',x.note||'','Active',t,x.created_by||'web'),db.prepare(`UPDATE products SET current_quantity=current_quantity+?,current_purchase_price=?,stock_value=(current_quantity+?)*?,updated_at=? WHERE product_id=?`).bind(qty,cost,qty,cost,t,x.product_id)]);return Response.json({ok:true,purchase_id:pid},{status:201})}
+
+
+// ============================================================
+// API ROUTER
+// ============================================================
+
+async function handleApiRequest(request, env, url) {
+
+  const path = url.pathname;
+  const method = request.method.toUpperCase();
+
+  // -----------------------------
+  // Health
+  // -----------------------------
+
+  if (path === "/api/health" && method === "GET") {
+    return json({
+      success: true,
+      service: "chamak-store",
+      status: "ok",
+      time: new Date().toISOString()
+    });
+  }
+
+
+  // -----------------------------
+  // Dashboard
+  // -----------------------------
+
+  if (path === "/api/dashboard" && method === "GET") {
+    return await getDashboard(env);
+  }
+
+
+  // -----------------------------
+  // Products
+  // -----------------------------
+
+  if (path === "/api/products" && method === "GET") {
+    return await getProducts(env, url);
+  }
+
+
+  // -----------------------------
+  // 404
+  // -----------------------------
+
+  return json(
+    {
+      success: false,
+      error: "NOT_FOUND",
+      message: "API endpoint পাওয়া যায়নি।"
+    },
+    404
+  );
+}
+
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+
+async function getDashboard(env) {
+
+  const queries = await Promise.all([
+    safeQuery(
+      env.DB,
+      `
+      SELECT
+        COALESCE(SUM(
+          CASE
+            WHEN account_code = '1000'
+            THEN current_balance
+            ELSE 0
+          END
+        ), 0) AS cash
+      FROM accounts
+      `
+    ),
+
+    safeQuery(
+      env.DB,
+      `
+      SELECT
+        COALESCE(SUM(
+          CASE
+            WHEN account_code = '1010'
+            THEN current_balance
+            ELSE 0
+          END
+        ), 0) AS bkash
+      FROM accounts
+      `
+    ),
+
+    safeQuery(
+      env.DB,
+      `
+      SELECT
+        COALESCE(SUM(
+          CASE
+            WHEN account_code = '1020'
+            THEN current_balance
+            ELSE 0
+          END
+        ), 0) AS nagad
+      FROM accounts
+      `
+    ),
+
+    safeQuery(
+      env.DB,
+      `
+      SELECT
+        COALESCE(SUM(current_stock_value), 0) AS stock_value
+      FROM products
+      WHERE status = 'ACTIVE'
+      `
+    ),
+
+    safeQuery(
+      env.DB,
+      `
+      SELECT
+        COALESCE(SUM(current_due), 0) AS customer_due
+      FROM customers
+      WHERE status = 'ACTIVE'
+      `
+    ),
+
+    safeQuery(
+      env.DB,
+      `
+      SELECT
+        COALESCE(SUM(current_due), 0) AS supplier_due
+      FROM suppliers
+      WHERE status = 'ACTIVE'
+      `
+    )
+  ]);
+
+  return json({
+    success: true,
+
+    data: {
+      cash: Number(queries[0]?.cash || 0),
+      bkash: Number(queries[1]?.bkash || 0),
+      nagad: Number(queries[2]?.nagad || 0),
+
+      stockValue: Number(
+        queries[3]?.stock_value || 0
+      ),
+
+      customerDue: Number(
+        queries[4]?.customer_due || 0
+      ),
+
+      supplierDue: Number(
+        queries[5]?.supplier_due || 0
+      )
+    }
+  });
+}
+
+
+// ============================================================
+// PRODUCTS
+// ============================================================
+
+async function getProducts(env, url) {
+
+  const search =
+    (url.searchParams.get("search") || "").trim();
+
+  const limitRaw =
+    Number(url.searchParams.get("limit") || 100);
+
+  const limit =
+    Math.min(Math.max(limitRaw, 1), 500);
+
+
+  let result;
+
+
+  if (search) {
+
+    result = await env.DB.prepare(
+      `
+      SELECT
+        id,
+        product_code,
+        name,
+        category,
+        unit,
+        sale_price,
+        minimum_stock,
+        current_stock,
+        current_stock_value,
+        status
+      FROM products
+      WHERE status = 'ACTIVE'
+        AND (
+          name LIKE ?
+          OR product_code LIKE ?
+        )
+      ORDER BY name COLLATE NOCASE
+      LIMIT ?
+      `
+    )
+      .bind(
+        `%${search}%`,
+        `%${search}%`,
+        limit
+      )
+      .all();
+
+  } else {
+
+    result = await env.DB.prepare(
+      `
+      SELECT
+        id,
+        product_code,
+        name,
+        category,
+        unit,
+        sale_price,
+        minimum_stock,
+        current_stock,
+        current_stock_value,
+        status
+      FROM products
+      WHERE status = 'ACTIVE'
+      ORDER BY name COLLATE NOCASE
+      LIMIT ?
+      `
+    )
+      .bind(limit)
+      .all();
+  }
+
+
+  return json({
+    success: true,
+    data: result.results || []
+  });
+}
+
+
+// ============================================================
+// DATABASE HELPERS
+// ============================================================
+
+async function safeQuery(db, sql) {
+
+  try {
+
+    const row =
+      await db.prepare(sql).first();
+
+    return row || {};
+
+  } catch (error) {
+
+    console.error(
+      "Database query failed:",
+      error
+    );
+
+    return {};
+  }
+}
+
+
+// ============================================================
+// JSON RESPONSE
+// ============================================================
+
+function json(data, status = 200) {
+
+  return new Response(
+    JSON.stringify(data),
+    {
+      status,
+
+      headers: {
+        "Content-Type":
+          "application/json; charset=UTF-8",
+
+        ...corsHeaders()
+      }
+    }
+  );
+}
+
+
+// ============================================================
+// CORS
+// ============================================================
+
+function corsHeaders() {
+
+  return {
+    "Access-Control-Allow-Origin": "*",
+
+    "Access-Control-Allow-Methods":
+      "GET,POST,PUT,DELETE,OPTIONS",
+
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization"
+  };
+}
+
+
+function addCors(response) {
+
+  const headers =
+    new Headers(response.headers);
+
+  Object.entries(corsHeaders())
+    .forEach(([key, value]) => {
+      headers.set(key, value);
+    });
+
+  return new Response(
+    response.body,
+    {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    }
+  );
+}
