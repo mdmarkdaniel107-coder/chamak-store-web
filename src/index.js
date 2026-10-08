@@ -131,112 +131,452 @@ function getIdempotencyKey(request, body) {
   );
 }
 
+// ============================================================
+// STEP 12 — DASHBOARD + REPORTS API
+// ============================================================
 
-/* =========================================================
-   DASHBOARD
-========================================================= */
+if (
+  request.method === "GET" &&
+  pathname === "/api/dashboard"
+) {
+  try {
 
-async function dashboard(db) {
-  const products = await getOne(
-    db,
-    `
+    const url = new URL(request.url);
+
+    const from =
+      url.searchParams.get("from") ||
+      new Date().toISOString().slice(0, 10);
+
+    const to =
+      url.searchParams.get("to") ||
+      from;
+
+    // --------------------------------------------------------
+    // 1. SALES
+    // --------------------------------------------------------
+
+    const sales = await env.DB.prepare(`
       SELECT
-        COUNT(*) AS product_count,
-        COALESCE(SUM(current_stock), 0) AS total_stock
-      FROM products
-    `
-  );
+        COUNT(*) AS invoice_count,
+        COALESCE(SUM(total_amount), 0) AS total_sales,
+        COALESCE(SUM(paid_amount), 0) AS paid_sales,
+        COALESCE(SUM(due_amount), 0) AS due_sales
+      FROM sales
+      WHERE sale_date BETWEEN ? AND ?
+    `)
+      .bind(from, to)
+      .first();
 
-  const customers = await getOne(
-    db,
-    `
+
+    // --------------------------------------------------------
+    // 2. PURCHASE
+    // --------------------------------------------------------
+
+    const purchases = await env.DB.prepare(`
       SELECT
-        COUNT(*) AS customer_count,
-        COALESCE(SUM(current_due), 0) AS customer_due
+        COUNT(*) AS invoice_count,
+        COALESCE(SUM(total_amount), 0) AS total_purchase,
+        COALESCE(SUM(paid_amount), 0) AS paid_purchase,
+        COALESCE(SUM(due_amount), 0) AS due_purchase
+      FROM purchases
+      WHERE purchase_date BETWEEN ? AND ?
+    `)
+      .bind(from, to)
+      .first();
+
+
+    // --------------------------------------------------------
+    // 3. EXPENSE
+    // --------------------------------------------------------
+
+    const expenses = await env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0) AS total_expense
+      FROM expenses
+      WHERE expense_date BETWEEN ? AND ?
+    `)
+      .bind(from, to)
+      .first();
+
+
+    // --------------------------------------------------------
+    // 4. CUSTOMER COLLECTION
+    // --------------------------------------------------------
+
+    const collections = await env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0) AS total_collection
+      FROM customer_collections
+      WHERE collection_date BETWEEN ? AND ?
+    `)
+      .bind(from, to)
+      .first();
+
+
+    // --------------------------------------------------------
+    // 5. SUPPLIER PAYMENT
+    // --------------------------------------------------------
+
+    const supplierPayments = await env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0) AS total_supplier_payment
+      FROM supplier_payments
+      WHERE payment_date BETWEEN ? AND ?
+    `)
+      .bind(from, to)
+      .first();
+
+
+    // --------------------------------------------------------
+    // 6. OTHER INCOME
+    // --------------------------------------------------------
+
+    const otherIncome = await env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0) AS total_other_income
+      FROM other_income
+      WHERE income_date BETWEEN ? AND ?
+    `)
+      .bind(from, to)
+      .first();
+
+
+    // --------------------------------------------------------
+    // 7. CURRENT CUSTOMER DUE
+    // --------------------------------------------------------
+
+    const customerDue = await env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(current_due), 0) AS total_customer_due,
+        COUNT(*) AS customers_with_due
       FROM customers
-    `
-  );
+      WHERE current_due > 0
+    `)
+      .first();
 
-  const suppliers = await getOne(
-    db,
-    `
+
+    // --------------------------------------------------------
+    // 8. CURRENT SUPPLIER DUE
+    // --------------------------------------------------------
+
+    const supplierDue = await env.DB.prepare(`
       SELECT
-        COUNT(*) AS supplier_count,
-        COALESCE(SUM(current_due), 0) AS supplier_due
+        COALESCE(SUM(current_due), 0) AS total_supplier_due,
+        COUNT(*) AS suppliers_with_due
       FROM suppliers
-    `
-  );
+      WHERE current_due > 0
+    `)
+      .first();
 
-  const accounts = await getAll(
-    db,
-    `
+
+    // --------------------------------------------------------
+    // 9. CURRENT STOCK
+    // --------------------------------------------------------
+
+    const stock = await env.DB.prepare(`
+      SELECT
+        COALESCE(
+          SUM(
+            current_stock *
+            COALESCE(last_purchase_cost, 0)
+          ),
+          0
+        ) AS stock_value,
+
+        COALESCE(
+          SUM(current_stock),
+          0
+        ) AS total_quantity,
+
+        COUNT(*) AS product_count
+
+      FROM products
+      WHERE is_active = 1
+    `)
+      .first();
+
+
+    // --------------------------------------------------------
+    // 10. LOW STOCK
+    // --------------------------------------------------------
+
+    const lowStock = await env.DB.prepare(`
       SELECT
         id,
-        code,
         name,
-        type,
-        current_balance
-      FROM accounts
-      ORDER BY code
-    `
-  );
+        current_stock,
+        low_stock_level
+      FROM products
+      WHERE
+        is_active = 1
+        AND current_stock <= low_stock_level
+      ORDER BY current_stock ASC
+      LIMIT 20
+    `)
+      .all();
 
-  const todaySales = await getOne(
-    db,
-    `
+
+    // --------------------------------------------------------
+    // 11. TOP SELLING PRODUCTS
+    // --------------------------------------------------------
+
+    const topProducts = await env.DB.prepare(`
       SELECT
-        COALESCE(SUM(total_amount), 0) AS total
-      FROM sales
-      WHERE sale_date = date('now', 'localtime')
-    `
-  );
+        p.id,
+        p.name,
 
-  const todayPurchase = await getOne(
-    db,
-    `
+        COALESCE(
+          SUM(si.quantity),
+          0
+        ) AS quantity_sold,
+
+        COALESCE(
+          SUM(si.line_total),
+          0
+        ) AS sales_value
+
+      FROM sale_items si
+
+      INNER JOIN sales s
+        ON s.id = si.sale_id
+
+      INNER JOIN products p
+        ON p.id = si.product_id
+
+      WHERE
+        s.sale_date BETWEEN ? AND ?
+
+      GROUP BY
+        p.id,
+        p.name
+
+      ORDER BY
+        quantity_sold DESC
+
+      LIMIT 10
+    `)
+      .bind(from, to)
+      .all();
+
+
+    // --------------------------------------------------------
+    // 12. RECENT TRANSACTIONS
+    // --------------------------------------------------------
+
+    const recentTransactions =
+      await env.DB.prepare(`
+        SELECT
+          id,
+          transaction_type,
+          transaction_date,
+          reference,
+          total_amount
+        FROM transactions
+        ORDER BY created_at DESC
+        LIMIT 20
+      `)
+      .all();
+
+
+    // --------------------------------------------------------
+    // 13. PROFIT
+    //
+    // Sales - COGS - Shop Expense
+    //
+    // এখানে Family Expense ব্যবসার profit থেকে
+    // বাদ দেওয়া হচ্ছে না।
+    // --------------------------------------------------------
+
+    const cogs = await env.DB.prepare(`
       SELECT
-        COALESCE(SUM(total_amount), 0) AS total
-      FROM purchases
-      WHERE purchase_date = date('now', 'localtime')
-    `
-  );
+        COALESCE(
+          SUM(
+            ABS(le.debit_amount)
+          ),
+          0
+        ) AS total_cogs
 
-  const todayExpense = await getOne(
-    db,
-    `
-      SELECT
-        COALESCE(SUM(amount), 0) AS total
-      FROM expenses
-      WHERE expense_date = date('now', 'localtime')
-    `
-  );
+      FROM ledger_entries le
 
-  return {
-    success: true,
+      INNER JOIN transactions t
+        ON t.id = le.transaction_id
 
-    products: {
-      count: Number(products?.product_count || 0),
-      stock_quantity: Number(products?.total_stock || 0)
-    },
+      WHERE
+        t.transaction_date BETWEEN ? AND ?
+        AND le.account_id = 5000
+    `)
+      .bind(from, to)
+      .first();
 
-    customers: {
-      count: Number(customers?.customer_count || 0),
-      due: Number(customers?.customer_due || 0)
-    },
 
-    suppliers: {
-      count: Number(suppliers?.supplier_count || 0),
-      due: Number(suppliers?.supplier_due || 0)
-    },
+    const totalSales =
+      Number(sales?.total_sales || 0);
 
-    today: {
-      sales: Number(todaySales?.total || 0),
-      purchase: Number(todayPurchase?.total || 0),
-      expense: Number(todayExpense?.total || 0)
-    },
+    const totalCOGS =
+      Number(cogs?.total_cogs || 0);
 
-    accounts
-  };
+    const totalExpense =
+      Number(expenses?.total_expense || 0);
+
+    const totalOtherIncome =
+      Number(otherIncome?.total_other_income || 0);
+
+    const grossProfit =
+      totalSales - totalCOGS;
+
+    const netProfit =
+      grossProfit -
+      totalExpense +
+      totalOtherIncome;
+
+
+    // --------------------------------------------------------
+    // 14. CASH / ACCOUNT BALANCES
+    // --------------------------------------------------------
+
+    const accountBalances =
+      await env.DB.prepare(`
+        SELECT
+          id,
+          code,
+          name,
+          account_type,
+          current_balance
+        FROM accounts
+        WHERE is_active = 1
+        ORDER BY id
+      `)
+      .all();
+
+
+    return jsonResponse({
+      success: true,
+
+      period: {
+        from,
+        to
+      },
+
+      sales: {
+        invoices:
+          Number(sales?.invoice_count || 0),
+
+        total:
+          totalSales,
+
+        paid:
+          Number(sales?.paid_sales || 0),
+
+        due:
+          Number(sales?.due_sales || 0)
+      },
+
+      purchases: {
+        invoices:
+          Number(purchases?.invoice_count || 0),
+
+        total:
+          Number(purchases?.total_purchase || 0),
+
+        paid:
+          Number(purchases?.paid_purchase || 0),
+
+        due:
+          Number(purchases?.due_purchase || 0)
+      },
+
+      collections:
+        Number(
+          collections?.total_collection || 0
+        ),
+
+      supplierPayments:
+        Number(
+          supplierPayments?.total_supplier_payment || 0
+        ),
+
+      expenses:
+        totalExpense,
+
+      otherIncome:
+        totalOtherIncome,
+
+      profit: {
+        gross:
+          grossProfit,
+
+        net:
+          netProfit,
+
+        cogs:
+          totalCOGS
+      },
+
+      customerDue: {
+        total:
+          Number(
+            customerDue?.total_customer_due || 0
+          ),
+
+        customers:
+          Number(
+            customerDue?.customers_with_due || 0
+          )
+      },
+
+      supplierDue: {
+        total:
+          Number(
+            supplierDue?.total_supplier_due || 0
+          ),
+
+        suppliers:
+          Number(
+            supplierDue?.suppliers_with_due || 0
+          )
+      },
+
+      stock: {
+        value:
+          Number(stock?.stock_value || 0),
+
+        quantity:
+          Number(stock?.total_quantity || 0),
+
+        products:
+          Number(stock?.product_count || 0)
+      },
+
+      lowStock:
+        lowStock.results || [],
+
+      topProducts:
+        topProducts.results || [],
+
+      recentTransactions:
+        recentTransactions.results || [],
+
+      accounts:
+        accountBalances.results || []
+
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Dashboard error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Dashboard load failed"
+      },
+      500
+    );
+  }
 }
 
 
