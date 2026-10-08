@@ -318,6 +318,14 @@ async function navigate(page) {
       renderSettings();
       break;
 
+    case "audit-log":
+     await renderAuditLog();
+     break;
+
+    case "backup":
+     await renderBackup();
+     break;    
+
     default:
       await renderDashboard();
 
@@ -8134,5 +8142,643 @@ async function saveStockAdjustment() {
 
     alert(error.message);
 
+  }
+}
+
+// ============================================================
+// STEP 13 — SETTINGS UI
+// ============================================================
+
+async function renderSettings() {
+
+  app.innerHTML = `
+    <section class="page-header">
+
+      <div>
+        <h2>⚙️ Settings</h2>
+        <p>দোকানের system configuration</p>
+      </div>
+
+    </section>
+
+
+    <div class="card">
+
+      <h3>System Settings</h3>
+
+      <div id="settingsContainer">
+        সেটিংস লোড হচ্ছে...
+      </div>
+
+    </div>
+  `;
+
+
+  try {
+
+    const response =
+      await apiFetch(
+        "/api/settings"
+      );
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+        "Settings load failed"
+      );
+    }
+
+
+    renderSettingsForm(
+      data.settings || []
+    );
+
+  } catch (error) {
+
+    console.error(error);
+
+    document.getElementById(
+      "settingsContainer"
+    ).innerHTML = `
+      <div class="error-state">
+        ${escapeHtml(error.message)}
+      </div>
+    `;
+  }
+}
+
+
+function renderSettingsForm(
+  settings
+) {
+
+  const container =
+    document.getElementById(
+      "settingsContainer"
+    );
+
+
+  if (!settings.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো setting পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML =
+    settings.map(setting => `
+      <div class="setting-row">
+
+        <label>
+          ${escapeHtml(setting.key)}
+        </label>
+
+        <div class="setting-control">
+
+          <input
+            type="text"
+            class="setting-value"
+            data-setting-key="${escapeHtml(
+              setting.key
+            )}"
+            value="${escapeHtml(
+              setting.value ?? ""
+            )}"
+          >
+
+          <button
+            class="btn btn-primary save-setting-btn"
+            data-key="${escapeHtml(
+              setting.key
+            )}"
+          >
+            Save
+          </button>
+
+        </div>
+
+      </div>
+    `).join("");
+
+
+  container
+    .querySelectorAll(
+      ".save-setting-btn"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        () => saveSingleSetting(
+          button.dataset.key
+        )
+      );
+
+    });
+}
+
+
+async function saveSingleSetting(
+  key
+) {
+
+  const input =
+    document.querySelector(
+      `.setting-value[data-setting-key="${CSS.escape(key)}"]`
+    );
+
+
+  if (!input) {
+    return;
+  }
+
+
+  try {
+
+    const response =
+      await apiFetch(
+        `/api/settings/${encodeURIComponent(key)}`,
+        {
+          method: "PUT",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify({
+            value: input.value
+          })
+        }
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Setting save failed"
+      );
+    }
+
+
+    alert(
+      "Setting সংরক্ষণ হয়েছে।"
+    );
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(error.message);
+  }
+}
+
+
+// ============================================================
+// AUDIT LOG UI
+// ============================================================
+
+async function renderAuditLog() {
+
+  app.innerHTML = `
+    <section class="page-header">
+
+      <div>
+        <h2>🧾 Audit Log</h2>
+        <p>System activity history</p>
+      </div>
+
+    </section>
+
+
+    <div class="card">
+
+      <div class="table-wrap">
+
+        <table>
+
+          <thead>
+
+            <tr>
+              <th>সময়</th>
+              <th>Action</th>
+              <th>Entity</th>
+              <th>ID</th>
+              <th>Details</th>
+            </tr>
+
+          </thead>
+
+          <tbody id="auditLogBody">
+
+            <tr>
+              <td
+                colspan="5"
+                class="empty-state"
+              >
+                লোড হচ্ছে...
+              </td>
+            </tr>
+
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+  `;
+
+
+  try {
+
+    const response =
+      await apiFetch(
+        "/api/audit-log?limit=200"
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Audit log load failed"
+      );
+    }
+
+
+    const tbody =
+      document.getElementById(
+        "auditLogBody"
+      );
+
+
+    const logs =
+      data.logs || [];
+
+
+    if (!logs.length) {
+
+      tbody.innerHTML = `
+        <tr>
+          <td
+            colspan="5"
+            class="empty-state"
+          >
+            কোনো activity নেই।
+          </td>
+        </tr>
+      `;
+
+      return;
+    }
+
+
+    tbody.innerHTML =
+      logs.map(log => `
+        <tr>
+
+          <td>
+            ${escapeHtml(
+              log.created_at || ""
+            )}
+          </td>
+
+          <td>
+            ${escapeHtml(
+              log.action || ""
+            )}
+          </td>
+
+          <td>
+            ${escapeHtml(
+              log.entity_type || "-"
+            )}
+          </td>
+
+          <td>
+            ${escapeHtml(
+              log.entity_id || "-"
+            )}
+          </td>
+
+          <td>
+            ${escapeHtml(
+              log.details || "{}"
+            )}
+          </td>
+
+        </tr>
+      `).join("");
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    document.getElementById(
+      "auditLogBody"
+    ).innerHTML = `
+      <tr>
+        <td
+          colspan="5"
+          class="error-state"
+        >
+          ${escapeHtml(error.message)}
+        </td>
+      </tr>
+    `;
+  }
+}
+
+
+// ============================================================
+// BACKUP / RESTORE UI
+// ============================================================
+
+async function renderBackup() {
+
+  app.innerHTML = `
+    <section class="page-header">
+
+      <div>
+        <h2>💾 Backup & Restore</h2>
+        <p>Database data নিরাপদে সংরক্ষণ ও পুনরুদ্ধার</p>
+      </div>
+
+    </section>
+
+
+    <div class="card">
+
+      <h3>Database Backup</h3>
+
+      <p>
+        বর্তমান database-এর গুরুত্বপূর্ণ data
+        JSON backup হিসেবে সংরক্ষণ করুন।
+      </p>
+
+      <button
+        class="btn btn-success"
+        id="downloadBackupBtn"
+      >
+        💾 Backup Download
+      </button>
+
+    </div>
+
+
+    <div class="card">
+
+      <h3>Database Restore</h3>
+
+      <p>
+        ⚠️ Restore করলে বর্তমান database-এর
+        data backup-এর data দিয়ে প্রতিস্থাপিত হবে।
+      </p>
+
+      <input
+        type="file"
+        id="restoreFile"
+        accept=".json,application/json"
+      >
+
+      <div style="margin-top:12px">
+
+        <label>
+          Restore confirmation
+        </label>
+
+        <input
+          type="text"
+          id="restoreConfirmation"
+          placeholder="RESTORE CHAMAK STORE"
+        >
+
+      </div>
+
+      <button
+        class="btn btn-danger"
+        id="restoreBackupBtn"
+        style="margin-top:12px"
+      >
+        Restore Database
+      </button>
+
+    </div>
+  `;
+
+
+  document
+    .getElementById(
+      "downloadBackupBtn"
+    )
+    .addEventListener(
+      "click",
+      downloadBackup
+    );
+
+
+  document
+    .getElementById(
+      "restoreBackupBtn"
+    )
+    .addEventListener(
+      "click",
+      restoreDatabase
+    );
+}
+
+
+async function downloadBackup() {
+
+  try {
+
+    const response =
+      await apiFetch(
+        "/api/backup"
+      );
+
+
+    if (!response.ok) {
+
+      const data =
+        await response.json();
+
+      throw new Error(
+        data.error ||
+        "Backup failed"
+      );
+    }
+
+
+    const blob =
+      await response.blob();
+
+
+    const url =
+      URL.createObjectURL(blob);
+
+
+    const link =
+      document.createElement("a");
+
+    link.href = url;
+
+    link.download =
+      `chamak-store-backup-${new Date()
+        .toISOString()
+        .replace(/[:.]/g, "-")}.json`;
+
+    document.body.appendChild(link);
+
+    link.click();
+
+    link.remove();
+
+    URL.revokeObjectURL(url);
+
+
+    alert(
+      "Backup তৈরি হয়েছে।"
+    );
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(error.message);
+  }
+}
+
+
+async function restoreDatabase() {
+
+  const file =
+    document.getElementById(
+      "restoreFile"
+    ).files[0];
+
+
+  const confirmation =
+    document.getElementById(
+      "restoreConfirmation"
+    ).value.trim();
+
+
+  if (!file) {
+
+    alert(
+      "প্রথমে backup JSON file নির্বাচন করুন।"
+    );
+
+    return;
+  }
+
+
+  if (
+    confirmation !==
+    "RESTORE CHAMAK STORE"
+  ) {
+
+    alert(
+      "সঠিক confirmation লিখুন।"
+    );
+
+    return;
+  }
+
+
+  const confirmed =
+    confirm(
+      "সতর্কতা!\n\n" +
+      "বর্তমান database data replace হবে।\n\n" +
+      "আপনি কি নিশ্চিত?"
+    );
+
+
+  if (!confirmed) {
+    return;
+  }
+
+
+  try {
+
+    const text =
+      await file.text();
+
+
+    const backup =
+      JSON.parse(text);
+
+
+    const response =
+      await apiFetch(
+        "/api/restore",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify({
+            confirm_restore:
+              "RESTORE CHAMAK STORE",
+
+            backup
+          })
+        }
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Restore failed"
+      );
+    }
+
+
+    alert(
+      "Database restore সফল হয়েছে।"
+    );
+
+
+    location.reload();
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(
+      error.message ||
+      "Restore failed"
+    );
   }
 }
