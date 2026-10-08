@@ -267,10 +267,7 @@ async function navigate(page) {
       break;
 
     case "purchase":
-      renderComingSoon(
-        "ক্রয় মডিউল",
-        "Purchase Invoice + Multiple Product Items"
-      );
+      await renderPurchase();
       break;
 
     case "sale":
@@ -1040,7 +1037,1288 @@ async function submitProduct(event) {
   }
 
 }
+/* =========================================================
+   PURCHASE MODULE
+   ========================================================= */
 
+let purchaseItems = [];
+
+
+/* =========================================================
+   PURCHASE INITIALIZATION
+   ========================================================= */
+
+async function renderPurchase() {
+
+  try {
+
+    showLoading("ক্রয় মডিউল লোড হচ্ছে...");
+
+    const [
+      suppliers,
+      products,
+      accounts
+    ] = await Promise.all([
+      loadSuppliers(),
+      loadProducts(),
+      loadAccounts()
+    ]);
+
+
+    purchaseItems = [];
+
+
+    pageActions.innerHTML = "";
+
+
+    pageContent.innerHTML = `
+
+      <div class="card">
+
+        <div class="card-header">
+
+          <div>
+
+            <h3>
+              নতুন ক্রয়
+            </h3>
+
+            <div class="stat-sub">
+              একটি Invoice-এ একাধিক পণ্য যোগ করা যাবে
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <div class="card-body">
+
+          <!-- ================= PURCHASE HEADER ================= -->
+
+          <div class="form-grid">
+
+            <div class="form-group">
+
+              <label>
+                সাপ্লায়ার *
+              </label>
+
+              <select
+                id="purchaseSupplier"
+                class="form-control"
+                required
+              >
+
+                <option value="">
+                  সাপ্লায়ার নির্বাচন করুন
+                </option>
+
+                ${suppliers.map(supplier => `
+
+                  <option value="${supplier.id}">
+
+                    ${escapeHtml(
+                      supplier.name
+                    )}
+
+                    ${
+                      supplier.phone
+                        ? ` — ${escapeHtml(
+                            supplier.phone
+                          )}`
+                        : ""
+                    }
+
+                  </option>
+
+                `).join("")}
+
+              </select>
+
+            </div>
+
+
+            <div class="form-group">
+
+              <label>
+                পেমেন্ট Account *
+              </label>
+
+              <select
+                id="purchasePaymentAccount"
+                class="form-control"
+              >
+
+                ${paymentAccountOptions(
+                  accounts
+                )}
+
+              </select>
+
+            </div>
+
+
+            <div class="form-group">
+
+              <label>
+                ক্রয়ের তারিখ
+              </label>
+
+              <input
+                id="purchaseDate"
+                class="form-control"
+                type="date"
+                value="${todayDate()}"
+              >
+
+            </div>
+
+
+            <div class="form-group">
+
+              <label>
+                Reference / Invoice No.
+              </label>
+
+              <input
+                id="purchaseReference"
+                class="form-control"
+                maxlength="100"
+                placeholder="ঐচ্ছিক"
+              >
+
+            </div>
+
+          </div>
+
+
+          <!-- ================= ADD PRODUCT ================= -->
+
+          <div
+            class="card"
+            style="margin-top:20px;"
+          >
+
+            <div class="card-header">
+
+              <h3>
+                পণ্য যোগ করুন
+              </h3>
+
+            </div>
+
+
+            <div class="card-body">
+
+              <div class="form-grid">
+
+                <div class="form-group">
+
+                  <label>
+                    পণ্য *
+                  </label>
+
+                  <select
+                    id="purchaseProduct"
+                    class="form-control"
+                  >
+
+                    <option value="">
+                      পণ্য নির্বাচন করুন
+                    </option>
+
+                    ${products.map(product => `
+
+                      <option
+                        value="${product.id}"
+                        data-cost="${product.purchase_price ?? product.cost_price ?? 0}"
+                      >
+
+                        ${escapeHtml(
+                          product.name
+                        )}
+
+                        ${
+                          product.sku
+                            ? ` (${escapeHtml(
+                                product.sku
+                              )})`
+                            : ""
+                        }
+
+                      </option>
+
+                    `).join("")}
+
+                  </select>
+
+                </div>
+
+
+                <div class="form-group">
+
+                  <label>
+                    Quantity *
+                  </label>
+
+                  <input
+                    id="purchaseQuantity"
+                    class="form-control"
+                    type="number"
+                    min="0.001"
+                    step="0.001"
+                    value="1"
+                  >
+
+                </div>
+
+
+                <div class="form-group">
+
+                  <label>
+                    Unit Cost *
+                  </label>
+
+                  <input
+                    id="purchaseUnitCost"
+                    class="form-control"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value="0"
+                  >
+
+                </div>
+
+
+                <div class="form-group">
+
+                  <label>
+                    Line Total
+                  </label>
+
+                  <input
+                    id="purchaseLineTotal"
+                    class="form-control"
+                    type="number"
+                    readonly
+                    value="0"
+                  >
+
+                </div>
+
+              </div>
+
+
+              <div class="form-actions">
+
+                <button
+                  id="addPurchaseItemBtn"
+                  type="button"
+                  class="btn btn-primary"
+                >
+                  + পণ্য যোগ করুন
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+
+          <!-- ================= PURCHASE ITEMS ================= -->
+
+          <div
+            class="card"
+            style="margin-top:20px;"
+          >
+
+            <div class="card-header">
+
+              <h3>
+                ক্রয়ের পণ্যসমূহ
+              </h3>
+
+              <span
+                id="purchaseItemCount"
+                class="badge badge-info"
+              >
+                0 item
+              </span>
+
+            </div>
+
+
+            <div class="card-body">
+
+              <div
+                id="purchaseItemsTable"
+                class="table-wrapper"
+              >
+
+                ${purchaseItemsTableHtml()}
+
+              </div>
+
+            </div>
+
+          </div>
+
+
+          <!-- ================= PAYMENT ================= -->
+
+          <div
+            class="card"
+            style="margin-top:20px;"
+          >
+
+            <div class="card-header">
+
+              <h3>
+                পেমেন্ট
+              </h3>
+
+            </div>
+
+
+            <div class="card-body">
+
+              <div class="form-grid">
+
+                <div class="form-group">
+
+                  <label>
+                    মোট ক্রয়
+                  </label>
+
+                  <input
+                    id="purchaseGrandTotal"
+                    class="form-control"
+                    readonly
+                    value="0"
+                  >
+
+                </div>
+
+
+                <div class="form-group">
+
+                  <label>
+                    এখন পরিশোধ
+                  </label>
+
+                  <input
+                    id="purchasePaidAmount"
+                    class="form-control"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value="0"
+                  >
+
+                </div>
+
+
+                <div class="form-group">
+
+                  <label>
+                    Supplier Due
+                  </label>
+
+                  <input
+                    id="purchaseDueAmount"
+                    class="form-control"
+                    readonly
+                    value="0"
+                  >
+
+                </div>
+
+              </div>
+
+
+              <div class="form-actions">
+
+                <button
+                  id="clearPurchaseBtn"
+                  type="button"
+                  class="btn btn-light"
+                >
+                  পরিষ্কার
+                </button>
+
+                <button
+                  id="savePurchaseBtn"
+                  type="button"
+                  class="btn btn-success"
+                >
+                  ✓ ক্রয় সংরক্ষণ
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    `;
+
+
+    bindPurchaseEvents();
+
+    updatePurchaseTotals();
+
+
+  } catch (error) {
+
+    renderError(error);
+
+  } finally {
+
+    hideLoading();
+
+  }
+
+}
+
+
+/* =========================================================
+   PAYMENT ACCOUNT OPTIONS
+   ========================================================= */
+
+function paymentAccountOptions(accounts) {
+
+  const allowedNames = [
+    "Cash",
+    "bKash",
+    "Nagad",
+    "Rocket"
+  ];
+
+
+  const filtered =
+    accounts.filter(account => {
+
+      const name =
+        String(
+          account.name || ""
+        ).toLowerCase();
+
+      return allowedNames.some(
+        allowed =>
+          name === allowed.toLowerCase()
+      );
+
+    });
+
+
+  if (!filtered.length) {
+
+    return `
+
+      <option value="1000">
+        Cash
+      </option>
+
+    `;
+
+  }
+
+
+  return filtered.map(account => `
+
+    <option value="${account.id}">
+
+      ${escapeHtml(
+        account.name
+      )}
+
+    </option>
+
+  `).join("");
+
+}
+
+
+/* =========================================================
+   TODAY DATE
+   ========================================================= */
+
+function todayDate() {
+
+  const date = new Date();
+
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(2, "0");
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+
+}
+
+
+/* =========================================================
+   BIND PURCHASE EVENTS
+   ========================================================= */
+
+function bindPurchaseEvents() {
+
+
+  const productSelect =
+    $("#purchaseProduct");
+
+
+  const quantityInput =
+    $("#purchaseQuantity");
+
+
+  const costInput =
+    $("#purchaseUnitCost");
+
+
+  productSelect.addEventListener(
+    "change",
+    () => {
+
+      const selected =
+        productSelect.options[
+          productSelect.selectedIndex
+        ];
+
+
+      if (!selected) {
+        return;
+      }
+
+
+      const cost =
+        Number(
+          selected.dataset.cost || 0
+        );
+
+
+      costInput.value =
+        cost.toFixed(2);
+
+
+      updatePurchaseLineTotal();
+
+    }
+  );
+
+
+  quantityInput.addEventListener(
+    "input",
+    updatePurchaseLineTotal
+  );
+
+
+  costInput.addEventListener(
+    "input",
+    updatePurchaseLineTotal
+  );
+
+
+  $("#addPurchaseItemBtn")
+    .addEventListener(
+      "click",
+      addPurchaseItem
+    );
+
+
+  $("#purchasePaidAmount")
+    .addEventListener(
+      "input",
+      updatePurchaseTotals
+    );
+
+
+  $("#savePurchaseBtn")
+    .addEventListener(
+      "click",
+      savePurchase
+    );
+
+
+  $("#clearPurchaseBtn")
+    .addEventListener(
+      "click",
+      () => navigate("purchase")
+    );
+
+}
+
+
+/* =========================================================
+   PURCHASE LINE TOTAL
+   ========================================================= */
+
+function updatePurchaseLineTotal() {
+
+  const quantity =
+    Number(
+      $("#purchaseQuantity")?.value || 0
+    );
+
+
+  const unitCost =
+    Number(
+      $("#purchaseUnitCost")?.value || 0
+    );
+
+
+  const total =
+    quantity * unitCost;
+
+
+  if ($("#purchaseLineTotal")) {
+
+    $("#purchaseLineTotal").value =
+      total.toFixed(2);
+
+  }
+
+}
+
+
+/* =========================================================
+   ADD PURCHASE ITEM
+   ========================================================= */
+
+function addPurchaseItem() {
+
+  const productId =
+    $("#purchaseProduct").value;
+
+
+  const productSelect =
+    $("#purchaseProduct");
+
+
+  const selected =
+    productSelect.options[
+      productSelect.selectedIndex
+    ];
+
+
+  const quantity =
+    Number(
+      $("#purchaseQuantity").value || 0
+    );
+
+
+  const unitCost =
+    Number(
+      $("#purchaseUnitCost").value || 0
+    );
+
+
+  if (!productId) {
+
+    showToast(
+      "পণ্য নির্বাচন করুন",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0
+  ) {
+
+    showToast(
+      "সঠিক Quantity দিন",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  if (
+    !Number.isFinite(unitCost) ||
+    unitCost < 0
+  ) {
+
+    showToast(
+      "সঠিক Unit Cost দিন",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  const existingIndex =
+    purchaseItems.findIndex(
+      item =>
+        String(item.product_id) ===
+        String(productId)
+    );
+
+
+  if (existingIndex !== -1) {
+
+    /*
+      একই Invoice-এ একই product দ্বিতীয়বার
+      আলাদা row না রেখে quantity যোগ করা হবে।
+
+      Cost পরিবর্তন করলে নতুন weighted/FIFO lot
+      তৈরি করার সুযোগ backend-এ থাকবে।
+    */
+
+    purchaseItems[
+      existingIndex
+    ].quantity += quantity;
+
+    purchaseItems[
+      existingIndex
+    ].unit_cost = unitCost;
+
+  } else {
+
+    purchaseItems.push({
+
+      product_id:
+        Number(productId),
+
+      product_name:
+        selected.textContent.trim(),
+
+      quantity,
+
+      unit_cost:
+        unitCost,
+
+      total:
+        quantity * unitCost
+
+    });
+
+  }
+
+
+  purchaseItems =
+    purchaseItems.map(item => ({
+
+      ...item,
+
+      total:
+        Number(item.quantity) *
+        Number(item.unit_cost)
+
+    }));
+
+
+  renderPurchaseItems();
+
+  updatePurchaseTotals();
+
+
+  $("#purchaseProduct").value = "";
+
+  $("#purchaseQuantity").value = "1";
+
+  $("#purchaseUnitCost").value = "0";
+
+  $("#purchaseLineTotal").value = "0";
+
+}
+
+
+/* =========================================================
+   PURCHASE ITEMS TABLE
+   ========================================================= */
+
+function purchaseItemsTableHtml() {
+
+  if (!purchaseItems.length) {
+
+    return `
+
+      <div class="empty-state">
+
+        <div class="icon">
+          🛒
+        </div>
+
+        <strong>
+          এখনো কোনো পণ্য যোগ করা হয়নি
+        </strong>
+
+        <span>
+          উপরের Product section থেকে পণ্য যোগ করুন
+        </span>
+
+      </div>
+
+    `;
+
+  }
+
+
+  return `
+
+    <table class="data-table">
+
+      <thead>
+
+        <tr>
+
+          <th>#</th>
+
+          <th>
+            পণ্য
+          </th>
+
+          <th class="text-right">
+            Quantity
+          </th>
+
+          <th class="text-right">
+            Unit Cost
+          </th>
+
+          <th class="text-right">
+            Total
+          </th>
+
+          <th>
+            Action
+          </th>
+
+        </tr>
+
+      </thead>
+
+
+      <tbody>
+
+        ${purchaseItems.map(
+          (item, index) => `
+
+            <tr>
+
+              <td>
+                ${index + 1}
+              </td>
+
+              <td>
+                <strong>
+                  ${escapeHtml(
+                    item.product_name
+                  )}
+                </strong>
+              </td>
+
+              <td class="text-right">
+                ${number(
+                  item.quantity
+                )}
+              </td>
+
+              <td class="text-right">
+                ৳${money(
+                  item.unit_cost
+                )}
+              </td>
+
+              <td class="text-right">
+                <strong>
+                  ৳${money(
+                    item.total
+                  )}
+                </strong>
+              </td>
+
+              <td>
+
+                <button
+                  type="button"
+                  class="btn btn-danger btn-small"
+                  data-remove-purchase-item="${index}"
+                >
+                  Remove
+                </button>
+
+              </td>
+
+            </tr>
+
+          `
+        ).join("")}
+
+      </tbody>
+
+    </table>
+
+  `;
+
+}
+
+
+/* =========================================================
+   RENDER PURCHASE ITEMS
+   ========================================================= */
+
+function renderPurchaseItems() {
+
+  const container =
+    $("#purchaseItemsTable");
+
+
+  if (!container) {
+    return;
+  }
+
+
+  container.innerHTML =
+    purchaseItemsTableHtml();
+
+
+  document
+    .querySelectorAll(
+      "[data-remove-purchase-item]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        () => {
+
+          const index =
+            Number(
+              button.dataset
+                .removePurchaseItem
+            );
+
+
+          purchaseItems.splice(
+            index,
+            1
+          );
+
+
+          renderPurchaseItems();
+
+          updatePurchaseTotals();
+
+        }
+      );
+
+    });
+
+
+  const count =
+    $("#purchaseItemCount");
+
+
+  if (count) {
+
+    count.textContent =
+      `${purchaseItems.length} item`;
+
+  }
+
+}
+
+
+/* =========================================================
+   PURCHASE TOTALS
+   ========================================================= */
+
+function updatePurchaseTotals() {
+
+  const grandTotal =
+    purchaseItems.reduce(
+      (sum, item) =>
+        sum +
+        Number(item.total || 0),
+      0
+    );
+
+
+  const paid =
+    Number(
+      $("#purchasePaidAmount")?.value ||
+      0
+    );
+
+
+  const due =
+    Math.max(
+      grandTotal - paid,
+      0
+    );
+
+
+  if ($("#purchaseGrandTotal")) {
+
+    $("#purchaseGrandTotal").value =
+      grandTotal.toFixed(2);
+
+  }
+
+
+  if ($("#purchaseDueAmount")) {
+
+    $("#purchaseDueAmount").value =
+      due.toFixed(2);
+
+  }
+
+
+  const paidInput =
+    $("#purchasePaidAmount");
+
+
+  if (paidInput) {
+
+    paidInput.max =
+      grandTotal.toFixed(2);
+
+  }
+
+}
+
+
+/* =========================================================
+   SAVE PURCHASE
+   ========================================================= */
+
+async function savePurchase() {
+
+  const supplierId =
+    Number(
+      $("#purchaseSupplier").value || 0
+    );
+
+
+  const paymentAccountId =
+    Number(
+      $("#purchasePaymentAccount").value ||
+      1000
+    );
+
+
+  const purchaseDate =
+    $("#purchaseDate").value ||
+    todayDate();
+
+
+  const reference =
+    $("#purchaseReference")
+      .value
+      .trim();
+
+
+  const grandTotal =
+    purchaseItems.reduce(
+      (sum, item) =>
+        sum +
+        Number(item.total || 0),
+      0
+    );
+
+
+  const paidAmount =
+    Number(
+      $("#purchasePaidAmount").value || 0
+    );
+
+
+  if (!supplierId) {
+
+    showToast(
+      "সাপ্লায়ার নির্বাচন করুন",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  if (!purchaseItems.length) {
+
+    showToast(
+      "কমপক্ষে একটি পণ্য যোগ করুন",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  if (
+    paidAmount < 0 ||
+    paidAmount > grandTotal
+  ) {
+
+    showToast(
+      "Paid Amount সঠিক নয়",
+      "error"
+    );
+
+    return;
+
+  }
+
+
+  const dueAmount =
+    grandTotal - paidAmount;
+
+
+  /*
+    Backend Transaction Engine-এর
+    createPurchase payload.
+  */
+
+  const payload = {
+
+    supplier_id:
+      supplierId,
+
+    payment_account_id:
+      paymentAccountId,
+
+    purchase_date:
+      purchaseDate,
+
+    reference:
+      reference || null,
+
+    total_amount:
+      grandTotal,
+
+    paid_amount:
+      paidAmount,
+
+    due_amount:
+      dueAmount,
+
+    items:
+      purchaseItems.map(item => ({
+
+        product_id:
+          Number(
+            item.product_id
+          ),
+
+        quantity:
+          Number(
+            item.quantity
+          ),
+
+        unit_cost:
+          Number(
+            item.unit_cost
+          ),
+
+        total:
+          Number(
+            item.total
+          )
+
+      }))
+
+  };
+
+
+  try {
+
+    showLoading(
+      "ক্রয় সংরক্ষণ হচ্ছে..."
+    );
+
+
+    /*
+      Duplicate mobile/network submission
+      ঠেকানোর জন্য unique idempotency key.
+    */
+
+    const idempotencyKey =
+      crypto.randomUUID();
+
+
+    await api(
+      "/api/transactions/purchase",
+      {
+
+        method: "POST",
+
+        headers: {
+
+          "Idempotency-Key":
+            idempotencyKey
+
+        },
+
+        body:
+          JSON.stringify(
+            payload
+          )
+
+      }
+    );
+
+
+    showToast(
+      "ক্রয় সফলভাবে সংরক্ষণ হয়েছে"
+    );
+
+
+    /*
+      Save হওয়ার পরে নতুন Purchase screen.
+      Dashboard data পরেরবার reload হবে।
+    */
+
+    await navigate("purchase");
+
+
+  } catch (error) {
+
+    console.error(
+      "Purchase save failed:",
+      error
+    );
+
+
+    showToast(
+      error.message ||
+      "ক্রয় সংরক্ষণ করা যায়নি",
+      "error"
+    );
+
+  } finally {
+
+    hideLoading();
+
+  }
+
+}
 
 /* =========================================================
    CUSTOMERS
