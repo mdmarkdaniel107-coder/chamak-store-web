@@ -1093,7 +1093,217 @@ export async function createSale(
     gross_profit: total - totalCOGS
   };
 }
+/* =========================================================
+   TOTAL SALE
+   ---------------------------------------------------------
+   Purpose:
+   Record total sales amount without itemized products.
 
+   Accounting:
+   - Cash/Bank/etc        -> Debit
+   - Customer Receivable  -> Debit (if due)
+   - Sales Income         -> Credit
+   - NO stock reduction
+   - NO COGS
+========================================================= */
+
+export async function createTotalSale(
+  db,
+  {
+    customerId = null,
+    totalAmount,
+    paymentAccountId = ACCOUNT.CASH,
+    paidAmount = 0,
+    transactionDate = nowISO().slice(0, 10),
+    note = null,
+    idempotencyKey = null
+  }
+) {
+  const total = money(totalAmount);
+  const paid = money(paidAmount);
+
+  if (total <= 0) {
+    throw new Error(
+      "Total sale amount must be greater than zero"
+    );
+  }
+
+  if (paid < 0) {
+    throw new Error(
+      "Paid amount cannot be negative"
+    );
+  }
+
+  if (paid > total) {
+    throw new Error(
+      "Paid amount cannot be greater than total sale"
+    );
+  }
+
+  const accountId =
+    validatePaymentAccount(paymentAccountId);
+
+  const due = total - paid;
+
+  // If there is due, a customer must be selected.
+  if (due > 0 && !customerId) {
+    throw new Error(
+      "Customer is required when total sale has due amount"
+    );
+  }
+
+  // Validate customer when supplied.
+  if (customerId) {
+    const customer = await getOne(
+      db,
+      `
+        SELECT *
+        FROM customers
+        WHERE id = ?
+        LIMIT 1
+      `,
+      [customerId]
+    );
+
+    if (!customer) {
+      throw new Error("Customer not found");
+    }
+  }
+
+  const saleId = uuid();
+
+  const tx = await createTransaction(db, {
+    transactionType: "TOTAL_SALE",
+    referenceId: saleId,
+    transactionDate,
+    note,
+    idempotencyKey
+  });
+
+  if (tx.duplicate) {
+    return tx.transaction;
+  }
+
+  const transactionId = tx.id;
+
+  /*
+   * No stock table update here.
+   * No stock_lots update.
+   * No stock_ledger entry.
+   * No COGS.
+   */
+
+  await run(
+    db,
+    `
+      INSERT INTO sales (
+        id,
+        transaction_id,
+        customer_id,
+        total_amount,
+        paid_amount,
+        due_amount,
+        cogs_amount,
+        sale_date,
+        note,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      saleId,
+      transactionId,
+      customerId,
+      total,
+      paid,
+      due,
+      0,
+      transactionDate,
+      note,
+      nowISO()
+    ]
+  );
+
+  // -------------------------------------------------------
+  // Paid amount
+  // -------------------------------------------------------
+
+  if (paid > 0) {
+    await ledger(db, {
+      transactionId,
+      accountId,
+      debit: paid,
+      credit: 0,
+      description: "Total sale payment received",
+      referenceType: "TOTAL_SALE",
+      referenceId: saleId
+    });
+
+    await changeAccountBalance(
+      db,
+      accountId,
+      paid,
+      0
+    );
+  }
+
+  // -------------------------------------------------------
+  // Customer due
+  // -------------------------------------------------------
+
+  if (due > 0) {
+    await ledger(db, {
+      transactionId,
+      accountId: ACCOUNT.CUSTOMER_RECEIVABLE,
+      debit: due,
+      credit: 0,
+      description: "Total sale customer receivable",
+      referenceType: "TOTAL_SALE",
+      referenceId: saleId
+    });
+
+    await run(
+      db,
+      `
+        UPDATE customers
+        SET current_due =
+          COALESCE(current_due, 0) + ?
+        WHERE id = ?
+      `,
+      [
+        due,
+        customerId
+      ]
+    );
+  }
+
+  // -------------------------------------------------------
+  // Sales Income
+  // -------------------------------------------------------
+
+  await ledger(db, {
+    transactionId,
+    accountId: ACCOUNT.SALES_INCOME,
+    debit: 0,
+    credit: total,
+    description: "Total sales income",
+    referenceType: "TOTAL_SALE",
+    referenceId: saleId
+  });
+
+  return {
+    success: true,
+    type: "TOTAL_SALE",
+    sale_id: saleId,
+    transaction_id: transactionId,
+    total,
+    paid,
+    due,
+    cogs: 0,
+    gross_profit: total,
+    stock_reduced: false
+  };
+}
 
 /* =========================================================
    CUSTOMER COLLECTION
