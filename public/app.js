@@ -271,11 +271,8 @@ async function navigate(page) {
       break;
 
     case "sale":
-      renderComingSoon(
-        "বিক্রি মডিউল",
-        "Product Sale + Direct Total Sale"
-      );
-      break;
+     await renderSale();
+     break;
 
     case "customers":
       await renderCustomers();
@@ -2319,6 +2316,1026 @@ async function savePurchase() {
   }
 
 }
+// ============================================================
+// SALES MODULE
+// ============================================================
+
+let saleProducts = [];
+let saleCustomers = [];
+let saleAccounts = [];
+let saleItems = [];
+
+async function renderSale() {
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>বিক্রয়</h1>
+        <p>একাধিক পণ্যসহ বিক্রয় Invoice</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>বিক্রয়ের তারিখ</label>
+          <input
+            id="saleDate"
+            type="date"
+            value="${todayDate()}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Customer</label>
+          <select id="saleCustomer">
+            <option value="">Cash Customer</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Payment Account</label>
+          <select id="salePaymentAccount">
+            <option value="">Payment Account নির্বাচন</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Reference</label>
+          <input
+            id="saleReference"
+            type="text"
+            placeholder="Invoice / Note"
+          >
+        </div>
+
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-title">
+        <h2>পণ্য যোগ করুন</h2>
+      </div>
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Product</label>
+          <select id="saleProduct">
+            <option value="">পণ্য নির্বাচন</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Quantity</label>
+          <input
+            id="saleQty"
+            type="number"
+            min="0.001"
+            step="0.001"
+            placeholder="0"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Unit Sale Price</label>
+          <input
+            id="saleUnitPrice"
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="0.00"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Total</label>
+          <input
+            id="saleLineTotal"
+            type="number"
+            readonly
+            value="0"
+          >
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+        <button
+          id="addSaleItemBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          + পণ্য যোগ করুন
+        </button>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="section-title">
+        <h2>বিক্রয় পণ্যসমূহ</h2>
+      </div>
+
+      <div id="saleItemsContainer">
+        <div class="empty-state">
+          এখনো কোনো পণ্য যোগ করা হয়নি।
+        </div>
+      </div>
+
+    </section>
+
+    <section class="card">
+
+      <div class="sale-summary">
+
+        <div class="summary-row">
+          <span>মোট বিক্রয়</span>
+          <strong id="saleGrandTotal">৳0.00</strong>
+        </div>
+
+        <div class="summary-row">
+          <span>Paid</span>
+          <strong id="salePaidAmount">৳0.00</strong>
+        </div>
+
+        <div class="summary-row">
+          <span>Customer Due</span>
+          <strong id="saleDueAmount">৳0.00</strong>
+        </div>
+
+      </div>
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Paid Amount</label>
+          <input
+            id="salePaidInput"
+            type="number"
+            min="0"
+            step="0.01"
+            value="0"
+          >
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+
+        <button
+          id="saveSaleBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          বিক্রয় সংরক্ষণ
+        </button>
+
+      </div>
+
+      <div id="saleMessage"></div>
+
+    </section>
+  `;
+
+  await loadSaleData();
+  bindSaleEvents();
+  renderSaleItems();
+  updateSaleTotals();
+}
+
+
+// ============================================================
+// LOAD DATA
+// ============================================================
+
+async function loadSaleData() {
+  const [
+    productsResponse,
+    customersResponse,
+    accountsResponse
+  ] = await Promise.all([
+    fetch("/api/products"),
+    fetch("/api/customers"),
+    fetch("/api/accounts")
+  ]);
+
+  if (!productsResponse.ok) {
+    throw new Error("Products load failed");
+  }
+
+  if (!customersResponse.ok) {
+    throw new Error("Customers load failed");
+  }
+
+  if (!accountsResponse.ok) {
+    throw new Error("Accounts load failed");
+  }
+
+  saleProducts = await productsResponse.json();
+  saleCustomers = await customersResponse.json();
+  saleAccounts = await accountsResponse.json();
+
+  populateSaleProducts();
+  populateSaleCustomers();
+  populateSaleAccounts();
+}
+
+
+// ============================================================
+// PRODUCT DROPDOWN
+// ============================================================
+
+function populateSaleProducts() {
+  const select = document.getElementById("saleProduct");
+
+  if (!select) return;
+
+  select.innerHTML = `
+    <option value="">পণ্য নির্বাচন</option>
+
+    ${saleProducts.map(product => `
+      <option value="${product.id}">
+        ${escapeHtml(product.sku || "")}
+        — ${escapeHtml(product.name || "")}
+        — Stock: ${formatNumber(product.current_stock || 0)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+// ============================================================
+// CUSTOMER DROPDOWN
+// ============================================================
+
+function populateSaleCustomers() {
+  const select = document.getElementById("saleCustomer");
+
+  if (!select) return;
+
+  select.innerHTML = `
+    <option value="">Cash Customer</option>
+
+    ${saleCustomers.map(customer => `
+      <option value="${customer.id}">
+        ${escapeHtml(customer.name || "")}
+        ${customer.phone ? ` — ${escapeHtml(customer.phone)}` : ""}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+// ============================================================
+// PAYMENT ACCOUNT
+// ============================================================
+
+function populateSaleAccounts() {
+  const select = document.getElementById("salePaymentAccount");
+
+  if (!select) return;
+
+  const allowedAccounts = saleAccounts.filter(account => {
+    return [
+      1000,
+      1010,
+      1020,
+      1030
+    ].includes(Number(account.code));
+  });
+
+  select.innerHTML = `
+    <option value="">Payment Account নির্বাচন</option>
+
+    ${allowedAccounts.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+// ============================================================
+// EVENTS
+// ============================================================
+
+function bindSaleEvents() {
+
+  const productSelect = document.getElementById("saleProduct");
+  const qtyInput = document.getElementById("saleQty");
+  const priceInput = document.getElementById("saleUnitPrice");
+
+  const addButton = document.getElementById("addSaleItemBtn");
+  const paidInput = document.getElementById("salePaidInput");
+  const saveButton = document.getElementById("saveSaleBtn");
+
+  productSelect?.addEventListener("change", () => {
+
+    const productId = Number(productSelect.value);
+
+    const product = saleProducts.find(
+      item => Number(item.id) === productId
+    );
+
+    if (!product) {
+      priceInput.value = "";
+      updateSaleLineTotal();
+      return;
+    }
+
+    if (product.sale_price !== undefined) {
+      priceInput.value = product.sale_price;
+    }
+
+    updateSaleLineTotal();
+  });
+
+
+  qtyInput?.addEventListener(
+    "input",
+    updateSaleLineTotal
+  );
+
+
+  priceInput?.addEventListener(
+    "input",
+    updateSaleLineTotal
+  );
+
+
+  addButton?.addEventListener(
+    "click",
+    addSaleItem
+  );
+
+
+  paidInput?.addEventListener(
+    "input",
+    updateSaleTotals
+  );
+
+
+  saveButton?.addEventListener(
+    "click",
+    saveSale
+  );
+}
+
+
+// ============================================================
+// LINE TOTAL
+// ============================================================
+
+function updateSaleLineTotal() {
+
+  const qty = Number(
+    document.getElementById("saleQty")?.value || 0
+  );
+
+  const price = Number(
+    document.getElementById("saleUnitPrice")?.value || 0
+  );
+
+  const total = qty * price;
+
+  const input = document.getElementById(
+    "saleLineTotal"
+  );
+
+  if (input) {
+    input.value = total.toFixed(2);
+  }
+}
+
+
+// ============================================================
+// ADD SALE ITEM
+// ============================================================
+
+function addSaleItem() {
+
+  const productId = Number(
+    document.getElementById("saleProduct").value
+  );
+
+  const qty = Number(
+    document.getElementById("saleQty").value
+  );
+
+  const unitPrice = Number(
+    document.getElementById("saleUnitPrice").value
+  );
+
+  if (!productId) {
+    showSaleMessage(
+      "পণ্য নির্বাচন করুন।",
+      "error"
+    );
+    return;
+  }
+
+  if (!qty || qty <= 0) {
+    showSaleMessage(
+      "সঠিক Quantity দিন।",
+      "error"
+    );
+    return;
+  }
+
+  if (unitPrice < 0) {
+    showSaleMessage(
+      "সঠিক Sale Price দিন।",
+      "error"
+    );
+    return;
+  }
+
+  const product = saleProducts.find(
+    item => Number(item.id) === productId
+  );
+
+  if (!product) {
+    showSaleMessage(
+      "পণ্য পাওয়া যায়নি।",
+      "error"
+    );
+    return;
+  }
+
+
+  const currentStock = Number(
+    product.current_stock || 0
+  );
+
+
+  const existingQty = saleItems
+    .filter(item => Number(item.product_id) === productId)
+    .reduce(
+      (sum, item) => sum + Number(item.quantity),
+      0
+    );
+
+
+  if (
+    existingQty + qty >
+    currentStock
+  ) {
+    showSaleMessage(
+      `স্টক যথেষ্ট নেই। Available: ${formatNumber(currentStock)}`,
+      "error"
+    );
+    return;
+  }
+
+
+  const existingItem = saleItems.find(
+    item => Number(item.product_id) === productId
+  );
+
+
+  if (existingItem) {
+
+    existingItem.quantity =
+      Number(existingItem.quantity) + qty;
+
+    existingItem.unit_price =
+      unitPrice;
+
+    existingItem.total =
+      existingItem.quantity * unitPrice;
+
+  } else {
+
+    saleItems.push({
+      product_id: productId,
+      product_name: product.name,
+      sku: product.sku,
+      quantity: qty,
+      unit_price: unitPrice,
+      total: qty * unitPrice
+    });
+
+  }
+
+
+  document.getElementById(
+    "saleProduct"
+  ).value = "";
+
+  document.getElementById(
+    "saleQty"
+  ).value = "";
+
+  document.getElementById(
+    "saleUnitPrice"
+  ).value = "";
+
+  document.getElementById(
+    "saleLineTotal"
+  ).value = "0";
+
+
+  renderSaleItems();
+  updateSaleTotals();
+
+  clearSaleMessage();
+}
+
+
+// ============================================================
+// RENDER ITEMS
+// ============================================================
+
+function renderSaleItems() {
+
+  const container = document.getElementById(
+    "saleItemsContainer"
+  );
+
+  if (!container) return;
+
+
+  if (saleItems.length === 0) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        এখনো কোনো পণ্য যোগ করা হয়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>SKU</th>
+            <th>পণ্য</th>
+            <th>Qty</th>
+            <th>Unit Price</th>
+            <th>Total</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+
+        <tbody>
+
+          ${saleItems.map((item, index) => `
+            <tr>
+
+              <td>${index + 1}</td>
+
+              <td>
+                ${escapeHtml(item.sku || "")}
+              </td>
+
+              <td>
+                ${escapeHtml(item.product_name || "")}
+              </td>
+
+              <td>
+                ${formatNumber(item.quantity)}
+              </td>
+
+              <td>
+                ৳${formatMoney(item.unit_price)}
+              </td>
+
+              <td>
+                ৳${formatMoney(item.total)}
+              </td>
+
+              <td>
+
+                <button
+                  type="button"
+                  class="btn btn-danger btn-sm"
+                  data-remove-sale-item="${index}"
+                >
+                  Remove
+                </button>
+
+              </td>
+
+            </tr>
+          `).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+
+
+  container
+    .querySelectorAll(
+      "[data-remove-sale-item]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        () => {
+
+          const index = Number(
+            button.dataset.removeSaleItem
+          );
+
+          saleItems.splice(index, 1);
+
+          renderSaleItems();
+          updateSaleTotals();
+
+        }
+      );
+
+    });
+}
+
+
+// ============================================================
+// TOTALS
+// ============================================================
+
+function updateSaleTotals() {
+
+  const grandTotal = saleItems.reduce(
+    (sum, item) =>
+      sum + Number(item.total || 0),
+    0
+  );
+
+
+  const paid = Math.max(
+    0,
+    Number(
+      document.getElementById(
+        "salePaidInput"
+      )?.value || 0
+    )
+  );
+
+
+  const due = Math.max(
+    0,
+    grandTotal - paid
+  );
+
+
+  const totalElement =
+    document.getElementById(
+      "saleGrandTotal"
+    );
+
+  const paidElement =
+    document.getElementById(
+      "salePaidAmount"
+    );
+
+  const dueElement =
+    document.getElementById(
+      "saleDueAmount"
+    );
+
+
+  if (totalElement) {
+    totalElement.textContent =
+      `৳${formatMoney(grandTotal)}`;
+  }
+
+
+  if (paidElement) {
+    paidElement.textContent =
+      `৳${formatMoney(paid)}`;
+  }
+
+
+  if (dueElement) {
+    dueElement.textContent =
+      `৳${formatMoney(due)}`;
+  }
+}
+
+
+// ============================================================
+// SAVE SALE
+// ============================================================
+
+async function saveSale() {
+
+  const button =
+    document.getElementById(
+      "saveSaleBtn"
+    );
+
+  if (!saleItems.length) {
+
+    showSaleMessage(
+      "কমপক্ষে একটি পণ্য যোগ করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const total = saleItems.reduce(
+    (sum, item) =>
+      sum + Number(item.total || 0),
+    0
+  );
+
+
+  const paid = Number(
+    document.getElementById(
+      "salePaidInput"
+    ).value || 0
+  );
+
+
+  const customerId = Number(
+    document.getElementById(
+      "saleCustomer"
+    ).value || 0
+  ) || null;
+
+
+  const paymentAccountId = Number(
+    document.getElementById(
+      "salePaymentAccount"
+    ).value || 0
+  ) || null;
+
+
+  const due = total - paid;
+
+
+  if (paid < 0) {
+
+    showSaleMessage(
+      "Paid Amount সঠিক নয়।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (paid > total) {
+
+    showSaleMessage(
+      "Paid Amount মোট বিক্রয়ের চেয়ে বেশি হতে পারবে না।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (paid > 0 && !paymentAccountId) {
+
+    showSaleMessage(
+      "Paid Amount-এর জন্য Payment Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (due > 0 && !customerId) {
+
+    showSaleMessage(
+      "Due sale হলে Customer নির্বাচন করতে হবে।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const payload = {
+
+    sale_date:
+      document.getElementById(
+        "saleDate"
+      ).value,
+
+    customer_id:
+      customerId,
+
+    payment_account_id:
+      paymentAccountId,
+
+    reference:
+      document.getElementById(
+        "saleReference"
+      ).value.trim(),
+
+    paid_amount:
+      paid,
+
+    items:
+      saleItems.map(item => ({
+        product_id:
+          Number(item.product_id),
+
+        quantity:
+          Number(item.quantity),
+
+        unit_price:
+          Number(item.unit_price)
+      }))
+
+  };
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response = await fetch(
+      "/api/transactions/sale",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          "Idempotency-Key":
+            crypto.randomUUID()
+        },
+
+        body:
+          JSON.stringify(payload)
+      }
+    );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "বিক্রয় সংরক্ষণ ব্যর্থ হয়েছে।"
+      );
+    }
+
+
+    showSaleMessage(
+      `বিক্রয় সফলভাবে সংরক্ষণ হয়েছে। Invoice: ${result.transaction_id || result.id || ""}`,
+      "success"
+    );
+
+
+    saleItems = [];
+
+    document.getElementById(
+      "salePaidInput"
+    ).value = "0";
+
+    document.getElementById(
+      "saleCustomer"
+    ).value = "";
+
+    document.getElementById(
+      "salePaymentAccount"
+    ).value = "";
+
+    document.getElementById(
+      "saleReference"
+    ).value = "";
+
+
+    renderSaleItems();
+    updateSaleTotals();
+
+
+    // Refresh product stock
+    await loadSaleData();
+
+
+  } catch (error) {
+
+    console.error(
+      "Sale save error:",
+      error
+    );
+
+    showSaleMessage(
+      error.message ||
+      "বিক্রয় সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "বিক্রয় সংরক্ষণ";
+  }
+}
+
+
+// ============================================================
+// MESSAGE
+// ============================================================
+
+function showSaleMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "saleMessage"
+    );
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+
+function clearSaleMessage() {
+
+  const element =
+    document.getElementById(
+      "saleMessage"
+    );
+
+  if (element) {
+    element.innerHTML = "";
+  }
+}
+
+
+// ============================================================
+// FORMAT HELPERS
+// ============================================================
+
+function formatMoney(value) {
+
+  return Number(
+    value || 0
+  ).toLocaleString(
+    "en-BD",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }
+  );
+}
+
+
+function formatNumber(value) {
+
+  return Number(
+    value || 0
+  ).toLocaleString(
+    "en-BD",
+    {
+      maximumFractionDigits: 3
+    }
+  );
+}
+
+
+function escapeHtml(value) {
+
+  return String(
+    value ?? ""
+  )
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 
 /* =========================================================
    CUSTOMERS
