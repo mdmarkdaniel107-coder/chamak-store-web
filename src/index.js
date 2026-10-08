@@ -1,380 +1,1039 @@
-// CHAMAK STORE
-// Cloudflare Worker API Foundation
-// Step 0005
+// src/index.js
 
-export default {
-  async fetch(request, env) {
-    try {
-      const url = new URL(request.url);
-
-      // -----------------------------
-      // CORS
-      // -----------------------------
-      if (request.method === "OPTIONS") {
-        return new Response(null, {
-          status: 204,
-          headers: corsHeaders()
-        });
-      }
-
-      // -----------------------------
-      // API Router
-      // -----------------------------
-      if (url.pathname.startsWith("/api/")) {
-        const response = await handleApiRequest(request, env, url);
-
-        return addCors(response);
-      }
-
-      // -----------------------------
-      // Frontend
-      // -----------------------------
-      return env.ASSETS.fetch(request);
-
-    } catch (error) {
-      console.error("Worker Error:", error);
-
-      return json(
-        {
-          success: false,
-          error: "INTERNAL_SERVER_ERROR",
-          message: "সার্ভারে একটি unexpected error হয়েছে।"
-        },
-        500
-      );
-    }
-  }
-};
+import {
+  ACCOUNT,
+  createPurchase,
+  createSale,
+  createCustomerCollection,
+  createSupplierPayment,
+  createExpense,
+  createOtherIncome,
+  createStockAdjustment,
+  createAccountTransfer
+} from "./services/transactionEngine.js";
 
 
-// ============================================================
-// API ROUTER
-// ============================================================
-
-async function handleApiRequest(request, env, url) {
-
-  const path = url.pathname;
-  const method = request.method.toUpperCase();
-
-  // -----------------------------
-  // Health
-  // -----------------------------
-
-  if (path === "/api/health" && method === "GET") {
-    return json({
-      success: true,
-      service: "chamak-store",
-      status: "ok",
-      time: new Date().toISOString()
-    });
-  }
-
-
-  // -----------------------------
-  // Dashboard
-  // -----------------------------
-
-  if (path === "/api/dashboard" && method === "GET") {
-    return await getDashboard(env);
-  }
-
-
-  // -----------------------------
-  // Products
-  // -----------------------------
-
-  if (path === "/api/products" && method === "GET") {
-    return await getProducts(env, url);
-  }
-
-
-  // -----------------------------
-  // 404
-  // -----------------------------
-
-  return json(
-    {
-      success: false,
-      error: "NOT_FOUND",
-      message: "API endpoint পাওয়া যায়নি।"
-    },
-    404
-  );
-}
-
-
-// ============================================================
-// DASHBOARD
-// ============================================================
-
-async function getDashboard(env) {
-
-  const queries = await Promise.all([
-    safeQuery(
-      env.DB,
-      `
-      SELECT
-        COALESCE(SUM(
-          CASE
-            WHEN account_code = '1000'
-            THEN current_balance
-            ELSE 0
-          END
-        ), 0) AS cash
-      FROM accounts
-      `
-    ),
-
-    safeQuery(
-      env.DB,
-      `
-      SELECT
-        COALESCE(SUM(
-          CASE
-            WHEN account_code = '1010'
-            THEN current_balance
-            ELSE 0
-          END
-        ), 0) AS bkash
-      FROM accounts
-      `
-    ),
-
-    safeQuery(
-      env.DB,
-      `
-      SELECT
-        COALESCE(SUM(
-          CASE
-            WHEN account_code = '1020'
-            THEN current_balance
-            ELSE 0
-          END
-        ), 0) AS nagad
-      FROM accounts
-      `
-    ),
-
-    safeQuery(
-      env.DB,
-      `
-      SELECT
-        COALESCE(SUM(current_stock_value), 0) AS stock_value
-      FROM products
-      WHERE status = 'ACTIVE'
-      `
-    ),
-
-    safeQuery(
-      env.DB,
-      `
-      SELECT
-        COALESCE(SUM(current_due), 0) AS customer_due
-      FROM customers
-      WHERE status = 'ACTIVE'
-      `
-    ),
-
-    safeQuery(
-      env.DB,
-      `
-      SELECT
-        COALESCE(SUM(current_due), 0) AS supplier_due
-      FROM suppliers
-      WHERE status = 'ACTIVE'
-      `
-    )
-  ]);
-
-  return json({
-    success: true,
-
-    data: {
-      cash: Number(queries[0]?.cash || 0),
-      bkash: Number(queries[1]?.bkash || 0),
-      nagad: Number(queries[2]?.nagad || 0),
-
-      stockValue: Number(
-        queries[3]?.stock_value || 0
-      ),
-
-      customerDue: Number(
-        queries[4]?.customer_due || 0
-      ),
-
-      supplierDue: Number(
-        queries[5]?.supplier_due || 0
-      )
-    }
-  });
-}
-
-
-// ============================================================
-// PRODUCTS
-// ============================================================
-
-async function getProducts(env, url) {
-
-  const search =
-    (url.searchParams.get("search") || "").trim();
-
-  const limitRaw =
-    Number(url.searchParams.get("limit") || 100);
-
-  const limit =
-    Math.min(Math.max(limitRaw, 1), 500);
-
-
-  let result;
-
-
-  if (search) {
-
-    result = await env.DB.prepare(
-      `
-      SELECT
-        id,
-        product_code,
-        name,
-        category,
-        unit,
-        sale_price,
-        minimum_stock,
-        current_stock,
-        current_stock_value,
-        status
-      FROM products
-      WHERE status = 'ACTIVE'
-        AND (
-          name LIKE ?
-          OR product_code LIKE ?
-        )
-      ORDER BY name COLLATE NOCASE
-      LIMIT ?
-      `
-    )
-      .bind(
-        `%${search}%`,
-        `%${search}%`,
-        limit
-      )
-      .all();
-
-  } else {
-
-    result = await env.DB.prepare(
-      `
-      SELECT
-        id,
-        product_code,
-        name,
-        category,
-        unit,
-        sale_price,
-        minimum_stock,
-        current_stock,
-        current_stock_value,
-        status
-      FROM products
-      WHERE status = 'ACTIVE'
-      ORDER BY name COLLATE NOCASE
-      LIMIT ?
-      `
-    )
-      .bind(limit)
-      .all();
-  }
-
-
-  return json({
-    success: true,
-    data: result.results || []
-  });
-}
-
-
-// ============================================================
-// DATABASE HELPERS
-// ============================================================
-
-async function safeQuery(db, sql) {
-
-  try {
-
-    const row =
-      await db.prepare(sql).first();
-
-    return row || {};
-
-  } catch (error) {
-
-    console.error(
-      "Database query failed:",
-      error
-    );
-
-    return {};
-  }
-}
-
-
-// ============================================================
-// JSON RESPONSE
-// ============================================================
+/* =========================================================
+   RESPONSE HELPERS
+========================================================= */
 
 function json(data, status = 200) {
-
   return new Response(
     JSON.stringify(data),
     {
       status,
-
       headers: {
-        "Content-Type":
-          "application/json; charset=UTF-8",
-
-        ...corsHeaders()
+        "Content-Type": "application/json; charset=UTF-8",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods":
+          "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers":
+          "Content-Type, Authorization, X-Idempotency-Key"
       }
     }
   );
 }
 
 
-// ============================================================
-// CORS
-// ============================================================
+function errorResponse(error, status = 400) {
+  return json(
+    {
+      success: false,
+      error: error?.message || String(error)
+    },
+    status
+  );
+}
 
-function corsHeaders() {
+
+async function readJSON(request) {
+  try {
+    return await request.json();
+  } catch {
+    throw new Error("Invalid JSON request body");
+  }
+}
+
+
+/* =========================================================
+   CORS
+========================================================= */
+
+function corsResponse() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods":
+        "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers":
+        "Content-Type, Authorization, X-Idempotency-Key",
+      "Access-Control-Max-Age": "86400"
+    }
+  });
+}
+
+
+/* =========================================================
+   DATABASE HELPERS
+========================================================= */
+
+async function getOne(db, sql, params = []) {
+  return await db
+    .prepare(sql)
+    .bind(...params)
+    .first();
+}
+
+
+async function getAll(db, sql, params = []) {
+  const result = await db
+    .prepare(sql)
+    .bind(...params)
+    .all();
+
+  return result.results || [];
+}
+
+
+async function run(db, sql, params = []) {
+  return await db
+    .prepare(sql)
+    .bind(...params)
+    .run();
+}
+
+
+/* =========================================================
+   IDEMPOTENCY KEY
+========================================================= */
+
+function getIdempotencyKey(request, body) {
+  return (
+    request.headers.get("X-Idempotency-Key") ||
+    body?.idempotency_key ||
+    null
+  );
+}
+
+
+/* =========================================================
+   DASHBOARD
+========================================================= */
+
+async function dashboard(db) {
+  const products = await getOne(
+    db,
+    `
+      SELECT
+        COUNT(*) AS product_count,
+        COALESCE(SUM(current_stock), 0) AS total_stock
+      FROM products
+    `
+  );
+
+  const customers = await getOne(
+    db,
+    `
+      SELECT
+        COUNT(*) AS customer_count,
+        COALESCE(SUM(current_due), 0) AS customer_due
+      FROM customers
+    `
+  );
+
+  const suppliers = await getOne(
+    db,
+    `
+      SELECT
+        COUNT(*) AS supplier_count,
+        COALESCE(SUM(current_due), 0) AS supplier_due
+      FROM suppliers
+    `
+  );
+
+  const accounts = await getAll(
+    db,
+    `
+      SELECT
+        id,
+        code,
+        name,
+        type,
+        current_balance
+      FROM accounts
+      ORDER BY code
+    `
+  );
+
+  const todaySales = await getOne(
+    db,
+    `
+      SELECT
+        COALESCE(SUM(total_amount), 0) AS total
+      FROM sales
+      WHERE sale_date = date('now', 'localtime')
+    `
+  );
+
+  const todayPurchase = await getOne(
+    db,
+    `
+      SELECT
+        COALESCE(SUM(total_amount), 0) AS total
+      FROM purchases
+      WHERE purchase_date = date('now', 'localtime')
+    `
+  );
+
+  const todayExpense = await getOne(
+    db,
+    `
+      SELECT
+        COALESCE(SUM(amount), 0) AS total
+      FROM expenses
+      WHERE expense_date = date('now', 'localtime')
+    `
+  );
 
   return {
-    "Access-Control-Allow-Origin": "*",
+    success: true,
 
-    "Access-Control-Allow-Methods":
-      "GET,POST,PUT,DELETE,OPTIONS",
+    products: {
+      count: Number(products?.product_count || 0),
+      stock_quantity: Number(products?.total_stock || 0)
+    },
 
-    "Access-Control-Allow-Headers":
-      "Content-Type, Authorization"
+    customers: {
+      count: Number(customers?.customer_count || 0),
+      due: Number(customers?.customer_due || 0)
+    },
+
+    suppliers: {
+      count: Number(suppliers?.supplier_count || 0),
+      due: Number(suppliers?.supplier_due || 0)
+    },
+
+    today: {
+      sales: Number(todaySales?.total || 0),
+      purchase: Number(todayPurchase?.total || 0),
+      expense: Number(todayExpense?.total || 0)
+    },
+
+    accounts
   };
 }
 
 
-function addCors(response) {
+/* =========================================================
+   PRODUCTS
+========================================================= */
 
-  const headers =
-    new Headers(response.headers);
+async function listProducts(db, url) {
+  const search =
+    url.searchParams.get("search")?.trim() || "";
 
-  Object.entries(corsHeaders())
-    .forEach(([key, value]) => {
-      headers.set(key, value);
-    });
+  const lowStock =
+    url.searchParams.get("low_stock") === "1";
 
-  return new Response(
-    response.body,
-    {
-      status: response.status,
-      statusText: response.statusText,
-      headers
-    }
+  let sql = `
+    SELECT
+      id,
+      sku,
+      name,
+      unit,
+      purchase_price,
+      sale_price,
+      last_purchase_cost,
+      current_stock,
+      low_stock_level,
+      created_at,
+      updated_at
+    FROM products
+  `;
+
+  const params = [];
+  const conditions = [];
+
+  if (search) {
+    conditions.push(`
+      (
+        name LIKE ?
+        OR sku LIKE ?
+      )
+    `);
+
+    const value = `%${search}%`;
+
+    params.push(value, value);
+  }
+
+  if (lowStock) {
+    conditions.push(`
+      current_stock <= low_stock_level
+    `);
+  }
+
+  if (conditions.length) {
+    sql += ` WHERE ${conditions.join(" AND ")} `;
+  }
+
+  sql += `
+    ORDER BY name COLLATE NOCASE ASC
+    LIMIT 1000
+  `;
+
+  const products = await getAll(
+    db,
+    sql,
+    params
   );
+
+  return json({
+    success: true,
+    products
+  });
 }
+
+
+/* =========================================================
+   CUSTOMERS
+========================================================= */
+
+async function listCustomers(db, url) {
+  const search =
+    url.searchParams.get("search")?.trim() || "";
+
+  let sql = `
+    SELECT
+      id,
+      name,
+      phone,
+      address,
+      current_due,
+      created_at,
+      updated_at
+    FROM customers
+  `;
+
+  const params = [];
+
+  if (search) {
+    sql += `
+      WHERE
+        name LIKE ?
+        OR phone LIKE ?
+    `;
+
+    const value = `%${search}%`;
+
+    params.push(value, value);
+  }
+
+  sql += `
+    ORDER BY name COLLATE NOCASE ASC
+    LIMIT 1000
+  `;
+
+  const customers = await getAll(
+    db,
+    sql,
+    params
+  );
+
+  return json({
+    success: true,
+    customers
+  });
+}
+
+
+/* =========================================================
+   SUPPLIERS
+========================================================= */
+
+async function listSuppliers(db, url) {
+  const search =
+    url.searchParams.get("search")?.trim() || "";
+
+  let sql = `
+    SELECT
+      id,
+      name,
+      phone,
+      address,
+      current_due,
+      created_at,
+      updated_at
+    FROM suppliers
+  `;
+
+  const params = [];
+
+  if (search) {
+    sql += `
+      WHERE
+        name LIKE ?
+        OR phone LIKE ?
+    `;
+
+    const value = `%${search}%`;
+
+    params.push(value, value);
+  }
+
+  sql += `
+    ORDER BY name COLLATE NOCASE ASC
+    LIMIT 1000
+  `;
+
+  const suppliers = await getAll(
+    db,
+    sql,
+    params
+  );
+
+  return json({
+    success: true,
+    suppliers
+  });
+}
+
+
+/* =========================================================
+   ACCOUNTS
+========================================================= */
+
+async function listAccounts(db) {
+  const accounts = await getAll(
+    db,
+    `
+      SELECT
+        id,
+        code,
+        name,
+        type,
+        current_balance,
+        is_active
+      FROM accounts
+      WHERE is_active = 1
+      ORDER BY code
+    `
+  );
+
+  return json({
+    success: true,
+    accounts
+  });
+}
+
+
+/* =========================================================
+   STOCK VERIFICATION
+========================================================= */
+
+async function stockVerification(db, url) {
+  const search =
+    url.searchParams.get("search")?.trim() || "";
+
+  let sql = `
+    SELECT
+      id,
+      sku,
+      name,
+      current_stock,
+      last_purchase_cost,
+      ROUND(
+        current_stock * COALESCE(last_purchase_cost, 0)
+      ) AS expected_stock_value
+    FROM products
+  `;
+
+  const params = [];
+
+  if (search) {
+    sql += `
+      WHERE
+        name LIKE ?
+        OR sku LIKE ?
+    `;
+
+    const value = `%${search}%`;
+
+    params.push(value, value);
+  }
+
+  sql += `
+    ORDER BY name COLLATE NOCASE ASC
+    LIMIT 1000
+  `;
+
+  const products = await getAll(
+    db,
+    sql,
+    params
+  );
+
+  return json({
+    success: true,
+    products
+  });
+}
+
+
+/* =========================================================
+   TRANSACTION ROUTER
+========================================================= */
+
+async function transactionRoute(
+  request,
+  env,
+  type
+) {
+  const body = await readJSON(request);
+
+  const db = env.DB;
+
+  const idempotencyKey =
+    getIdempotencyKey(request, body);
+
+  const common = {
+    transactionDate:
+      body.transaction_date ||
+      new Date().toISOString().slice(0, 10),
+
+    note:
+      body.note || null,
+
+    idempotencyKey
+  };
+
+
+  switch (type) {
+
+    /* ---------------------------------------------
+       PURCHASE
+    --------------------------------------------- */
+
+    case "purchase":
+
+      return json(
+        await createPurchase(db, {
+          supplierId:
+            body.supplier_id || null,
+
+          items:
+            body.items,
+
+          paymentAccountId:
+            body.payment_account_id ||
+            ACCOUNT.CASH,
+
+          paidAmount:
+            body.paid_amount || 0,
+
+          ...common
+        })
+      );
+
+
+    /* ---------------------------------------------
+       SALE
+    --------------------------------------------- */
+
+    case "sale":
+
+      return json(
+        await createSale(db, {
+          customerId:
+            body.customer_id || null,
+
+          items:
+            body.items,
+
+          paymentAccountId:
+            body.payment_account_id ||
+            ACCOUNT.CASH,
+
+          paidAmount:
+            body.paid_amount || 0,
+
+          ...common
+        })
+      );
+
+
+    /* ---------------------------------------------
+       CUSTOMER COLLECTION
+    --------------------------------------------- */
+
+    case "customer-collection":
+
+      return json(
+        await createCustomerCollection(db, {
+          customerId:
+            body.customer_id,
+
+          amount:
+            body.amount,
+
+          accountId:
+            body.account_id ||
+            ACCOUNT.CASH,
+
+          ...common
+        })
+      );
+
+
+    /* ---------------------------------------------
+       SUPPLIER PAYMENT
+    --------------------------------------------- */
+
+    case "supplier-payment":
+
+      return json(
+        await createSupplierPayment(db, {
+          supplierId:
+            body.supplier_id,
+
+          amount:
+            body.amount,
+
+          accountId:
+            body.account_id ||
+            ACCOUNT.CASH,
+
+          ...common
+        })
+      );
+
+
+    /* ---------------------------------------------
+       EXPENSE
+    --------------------------------------------- */
+
+    case "expense":
+
+      return json(
+        await createExpense(db, {
+          amount:
+            body.amount,
+
+          accountId:
+            body.account_id ||
+            ACCOUNT.CASH,
+
+          expenseType:
+            body.expense_type ||
+            "SHOP",
+
+          ...common
+        })
+      );
+
+
+    /* ---------------------------------------------
+       OTHER INCOME
+    --------------------------------------------- */
+
+    case "other-income":
+
+      return json(
+        await createOtherIncome(db, {
+          amount:
+            body.amount,
+
+          accountId:
+            body.account_id ||
+            ACCOUNT.CASH,
+
+          ...common
+        })
+      );
+
+
+    /* ---------------------------------------------
+       STOCK ADJUSTMENT
+    --------------------------------------------- */
+
+    case "stock-adjustment":
+
+      return json(
+        await createStockAdjustment(db, {
+          productId:
+            body.product_id,
+
+          newQuantity:
+            body.new_quantity,
+
+          unitCost:
+            body.unit_cost ?? null,
+
+          reason:
+            body.reason,
+
+          ...common
+        })
+      );
+
+
+    /* ---------------------------------------------
+       ACCOUNT TRANSFER
+    --------------------------------------------- */
+
+    case "account-transfer":
+
+      return json(
+        await createAccountTransfer(db, {
+          fromAccountId:
+            body.from_account_id,
+
+          toAccountId:
+            body.to_account_id,
+
+          amount:
+            body.amount,
+
+          ...common
+        })
+      );
+
+
+    default:
+
+      throw new Error(
+        `Unknown transaction type: ${type}`
+      );
+  }
+}
+
+
+/* =========================================================
+   MAIN ROUTER
+========================================================= */
+
+export default {
+
+  async fetch(request, env) {
+
+    /* ---------------------------------------------
+       CORS PREFLIGHT
+    --------------------------------------------- */
+
+    if (request.method === "OPTIONS") {
+      return corsResponse();
+    }
+
+
+    const url =
+      new URL(request.url);
+
+    const path =
+      url.pathname.replace(/\/+$/, "") ||
+      "/";
+
+
+    try {
+
+      /* ---------------------------------------------
+         HEALTH
+      --------------------------------------------- */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/health"
+      ) {
+
+        const result =
+          await getOne(
+            env.DB,
+            `SELECT 1 AS ok`
+          );
+
+        return json({
+          success: true,
+          status: "ok",
+          database:
+            result?.ok === 1
+              ? "connected"
+              : "unknown",
+          service: "chamak-store",
+          version: "1.0.0"
+        });
+      }
+
+
+      /* ---------------------------------------------
+         DASHBOARD
+      --------------------------------------------- */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/dashboard"
+      ) {
+
+        return json(
+          await dashboard(env.DB)
+        );
+      }
+
+
+      /* ---------------------------------------------
+         PRODUCTS
+      --------------------------------------------- */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/products"
+      ) {
+
+        return await listProducts(
+          env.DB,
+          url
+        );
+      }
+
+
+      /* ---------------------------------------------
+         CUSTOMERS
+      --------------------------------------------- */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/customers"
+      ) {
+
+        return await listCustomers(
+          env.DB,
+          url
+        );
+      }
+
+
+      /* ---------------------------------------------
+         SUPPLIERS
+      --------------------------------------------- */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/suppliers"
+      ) {
+
+        return await listSuppliers(
+          env.DB,
+          url
+        );
+      }
+
+
+      /* ---------------------------------------------
+         ACCOUNTS
+      --------------------------------------------- */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/accounts"
+      ) {
+
+        return await listAccounts(
+          env.DB
+        );
+      }
+
+
+      /* ---------------------------------------------
+         STOCK VERIFICATION
+      --------------------------------------------- */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/stock-verification"
+      ) {
+
+        return await stockVerification(
+          env.DB,
+          url
+        );
+      }
+
+
+      /* ---------------------------------------------
+         PURCHASE
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path === "/api/transactions/purchase"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "purchase"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         SALE
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path === "/api/transactions/sale"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "sale"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         CUSTOMER COLLECTION
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/customer-collection"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "customer-collection"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         SUPPLIER PAYMENT
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/supplier-payment"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "supplier-payment"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         EXPENSE
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/expense"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "expense"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         OTHER INCOME
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/other-income"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "other-income"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         STOCK ADJUSTMENT
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/stock-adjustment"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "stock-adjustment"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         ACCOUNT TRANSFER
+      --------------------------------------------- */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/account-transfer"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "account-transfer"
+        );
+      }
+
+
+      /* ---------------------------------------------
+         API 404
+      --------------------------------------------- */
+
+      if (path.startsWith("/api/")) {
+
+        return json(
+          {
+            success: false,
+            error: "API endpoint not found",
+            path
+          },
+          404
+        );
+      }
+
+
+      /* ---------------------------------------------
+         STATIC ASSETS
+      --------------------------------------------- */
+
+      return env.ASSETS.fetch(request);
+
+    } catch (error) {
+
+      console.error(
+        "CHAMAK STORE ERROR:",
+        error
+      );
+
+      return errorResponse(
+        error,
+        400
+      );
+    }
+  }
+};
