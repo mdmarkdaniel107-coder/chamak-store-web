@@ -1001,6 +1001,220 @@ if (
     )
   );
 }
+// ============================================================
+// CUSTOMER LEDGER
+// ============================================================
+
+if (
+  pathname.match(
+    /^\/api\/customers\/\d+\/ledger$/
+  ) &&
+  request.method === "GET"
+) {
+
+  const customerId =
+    Number(
+      pathname.split("/")[3]
+    );
+
+
+  if (!customerId) {
+
+    return jsonResponse(
+      {
+        error:
+          "Invalid customer ID"
+      },
+      400,
+      corsHeaders
+    );
+
+  }
+
+
+  try {
+
+    const customer =
+      await env.DB
+        .prepare(`
+          SELECT
+            id,
+            name,
+            phone,
+            current_due
+          FROM customers
+          WHERE id = ?
+        `)
+        .bind(customerId)
+        .first();
+
+
+    if (!customer) {
+
+      return jsonResponse(
+        {
+          error:
+            "Customer not found"
+        },
+        404,
+        corsHeaders
+      );
+
+    }
+
+
+    const sales =
+      await env.DB
+        .prepare(`
+          SELECT
+            s.id,
+            s.sale_date AS date,
+            'SALE' AS type,
+            COALESCE(
+              s.reference,
+              ''
+            ) AS reference,
+            COALESCE(
+              s.total_amount,
+              0
+            ) AS debit,
+            0 AS credit
+          FROM sales s
+          WHERE s.customer_id = ?
+
+          ORDER BY
+            s.sale_date ASC,
+            s.id ASC
+        `)
+        .bind(customerId)
+        .all();
+
+
+    const collections =
+      await env.DB
+        .prepare(`
+          SELECT
+            cc.id,
+            cc.collection_date AS date,
+            'COLLECTION' AS type,
+            COALESCE(
+              cc.note,
+              ''
+            ) AS reference,
+            0 AS debit,
+            COALESCE(
+              cc.amount,
+              0
+            ) AS credit
+          FROM customer_collections cc
+          WHERE cc.customer_id = ?
+
+          ORDER BY
+            cc.collection_date ASC,
+            cc.id ASC
+        `)
+        .bind(customerId)
+        .all();
+
+
+    const entries = [
+      ...(sales.results || []),
+      ...(collections.results || [])
+    ]
+      .sort((a, b) => {
+
+        const dateCompare =
+          String(a.date || "")
+            .localeCompare(
+              String(b.date || "")
+            );
+
+        if (dateCompare !== 0) {
+          return dateCompare;
+        }
+
+        return Number(a.id) -
+          Number(b.id);
+
+      });
+
+
+    let balance = 0;
+
+
+    for (const entry of entries) {
+
+      balance +=
+        Number(entry.debit || 0);
+
+      balance -=
+        Number(entry.credit || 0);
+
+      entry.balance =
+        balance;
+
+    }
+
+
+    const totalDue =
+      entries.reduce(
+        (sum, entry) =>
+          sum +
+          Number(
+            entry.debit || 0
+          ),
+        0
+      );
+
+
+    const totalCollection =
+      entries.reduce(
+        (sum, entry) =>
+          sum +
+          Number(
+            entry.credit || 0
+          ),
+        0
+      );
+
+
+    return jsonResponse(
+      {
+        customer,
+        entries,
+        total_due: totalDue,
+        total_collection:
+          totalCollection,
+        current_due:
+          Number(
+            customer.current_due || 0
+          )
+      },
+      200,
+      corsHeaders
+    );
+
+
+  } catch (error) {
+
+    console.error(
+      "Customer ledger error:",
+      error
+    );
+
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Customer ledger failed"
+      },
+      500,
+      corsHeaders
+    );
+
+  }
+}      
 
 
 /* =========================================================
