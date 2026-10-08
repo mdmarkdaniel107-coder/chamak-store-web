@@ -495,6 +495,249 @@ async function stockVerification(db, url) {
   });
 }
 // ============================================================
+// STOCK VERIFICATION — SAVE SNAPSHOT
+// ============================================================
+
+if (
+  request.method === "POST" &&
+  pathname === "/api/stock-verification"
+) {
+
+  try {
+
+    const body = await request.json();
+
+    const verificationDate =
+      body.verification_date ||
+      new Date().toISOString().slice(0, 10);
+
+    const note =
+      String(body.note || "").trim();
+
+    const items =
+      Array.isArray(body.items)
+        ? body.items
+        : [];
+
+    if (!items.length) {
+
+      return jsonResponse(
+        {
+          error:
+            "কমপক্ষে একটি stock verification item প্রয়োজন"
+        },
+        400
+      );
+
+    }
+
+    const transactionId =
+      crypto.randomUUID();
+
+    const verificationId =
+      crypto.randomUUID();
+
+    const createdAt =
+      new Date().toISOString();
+
+    /*
+     * IMPORTANT:
+     *
+     * Verification শুধু snapshot।
+     * এখানে products.current_stock পরিবর্তন করা হবে না।
+     */
+
+    const productIds =
+      [
+        ...new Set(
+          items
+            .map(item => Number(item.product_id))
+            .filter(id => Number.isInteger(id) && id > 0)
+        )
+      ];
+
+    if (!productIds.length) {
+
+      return jsonResponse(
+        {
+          error:
+            "Valid product_id পাওয়া যায়নি"
+        },
+        400
+      );
+
+    }
+
+    const placeholders =
+      productIds.map(() => "?").join(",");
+
+    const productsResult =
+      await env.DB.prepare(`
+        SELECT
+          id,
+          name,
+          current_stock,
+          last_purchase_cost
+        FROM products
+        WHERE id IN (${placeholders})
+      `)
+      .bind(...productIds)
+      .all();
+
+    const productsById =
+      new Map(
+        (productsResult.results || [])
+          .map(product => [
+            Number(product.id),
+            product
+          ])
+      );
+
+    const statements = [];
+
+    statements.push(
+      env.DB.prepare(`
+        INSERT INTO stock_verifications (
+          id,
+          verification_date,
+          note,
+          created_at
+        )
+        VALUES (?, ?, ?, ?)
+      `).bind(
+        verificationId,
+        verificationDate,
+        note,
+        createdAt
+      )
+    );
+
+    for (const item of items) {
+
+      const productId =
+        Number(item.product_id);
+
+      const physicalQty =
+        Number(item.physical_qty);
+
+      const product =
+        productsById.get(productId);
+
+      if (!product) {
+
+        return jsonResponse(
+          {
+            error:
+              `Product not found: ${productId}`
+          },
+          400
+        );
+
+      }
+
+      if (
+        !Number.isFinite(physicalQty) ||
+        physicalQty < 0
+      ) {
+
+        return jsonResponse(
+          {
+            error:
+              `Invalid physical quantity for product ${productId}`
+          },
+          400
+        );
+
+      }
+
+      const systemQty =
+        Number(product.current_stock || 0);
+
+      const unitCost =
+        Number(product.last_purchase_cost || 0);
+
+      const expectedValue =
+        systemQty * unitCost;
+
+      const physicalValue =
+        physicalQty * unitCost;
+
+      const differenceQty =
+        physicalQty - systemQty;
+
+      const differenceValue =
+        physicalValue - expectedValue;
+
+      statements.push(
+        env.DB.prepare(`
+          INSERT INTO stock_verification_items (
+            id,
+            verification_id,
+            product_id,
+            system_qty,
+            unit_cost,
+            expected_value,
+            physical_qty,
+            physical_value,
+            difference_qty,
+            difference_value
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          crypto.randomUUID(),
+          verificationId,
+          productId,
+          systemQty,
+          unitCost,
+          expectedValue,
+          physicalQty,
+          physicalValue,
+          differenceQty,
+          differenceValue
+        )
+      );
+
+    }
+
+    /*
+     * D1 batch:
+     * Verification header + all items
+     * একসাথে commit হবে।
+     */
+    await env.DB.batch(statements);
+
+    return jsonResponse(
+      {
+        success: true,
+        verification_id:
+          verificationId,
+        items_saved:
+          items.length
+      },
+      201
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Stock verification error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Stock verification failed"
+      },
+      500
+    );
+
+  }
+}
+
+
+// ============================================================
 // SUPPLIER LEDGER
 // ============================================================
 
