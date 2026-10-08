@@ -330,493 +330,601 @@ async function navigate(page) {
    DASHBOARD
    ========================================================= */
 
-async function loadDashboard() {
-
-  const data = await api("/api/dashboard");
-
-  state.dashboard = data;
-
-  return data;
-}
-
+// ============================================================
+// STEP 12 — DASHBOARD UI
+// ============================================================
 
 async function renderDashboard() {
 
-  try {
+  app.innerHTML = `
+    <section class="page-header">
 
-    showLoading("ড্যাশবোর্ড লোড হচ্ছে...");
+      <div>
+        <h2>Dashboard</h2>
+        <p>দোকানের বর্তমান হিসাবের সারসংক্ষেপ</p>
+      </div>
 
-    const data = await loadDashboard();
+      <div class="date-filter">
 
+        <input
+          type="date"
+          id="dashboardFrom"
+          value="${todayDate()}"
+        >
 
-    const stats = data?.stats || data || {};
+        <input
+          type="date"
+          id="dashboardTo"
+          value="${todayDate()}"
+        >
 
-
-    pageContent.innerHTML = `
-
-      <div class="stats-grid">
-
-        <div class="stat-card">
-
-          <div class="stat-label">
-            মোট স্টক
-          </div>
-
-          <div class="stat-value">
-            ${number(
-              stats.total_stock ??
-              stats.stock_qty ??
-              0
-            )}
-          </div>
-
-          <div class="stat-sub">
-            পণ্যের বর্তমান quantity
-          </div>
-
-        </div>
-
-
-        <div class="stat-card">
-
-          <div class="stat-label">
-            স্টক ভ্যালু
-          </div>
-
-          <div class="stat-value">
-            ৳${money(
-              stats.stock_value ??
-              stats.inventory_value ??
-              0
-            )}
-          </div>
-
-          <div class="stat-sub">
-            বর্তমান inventory value
-          </div>
-
-        </div>
-
-
-        <div class="stat-card">
-
-          <div class="stat-label">
-            কাস্টমার বাকি
-          </div>
-
-          <div class="stat-value">
-            ৳${money(
-              stats.customer_due ??
-              stats.receivable ??
-              0
-            )}
-          </div>
-
-          <div class="stat-sub">
-            মোট পাওনা
-          </div>
-
-        </div>
-
-
-        <div class="stat-card">
-
-          <div class="stat-label">
-            সাপ্লায়ার বাকি
-          </div>
-
-          <div class="stat-value">
-            ৳${money(
-              stats.supplier_due ??
-              stats.payable ??
-              0
-            )}
-          </div>
-
-          <div class="stat-sub">
-            মোট দেনা
-          </div>
-
-        </div>
+        <button
+          class="btn btn-primary"
+          id="dashboardLoadBtn"
+        >
+          হিসাব দেখুন
+        </button>
 
       </div>
 
-
-      <div class="dashboard-grid">
-
-        <div class="card">
-
-          <div class="card-header">
-            <h3>দ্রুত কাজ</h3>
-          </div>
-
-          <div class="card-body">
-
-            <div class="quick-actions">
-
-              <button
-                class="quick-action"
-                data-quick-page="purchase"
-              >
-                <strong>🛒 নতুন ক্রয়</strong>
-                <span>
-                  সাপ্লায়ার থেকে পণ্য কিনুন
-                </span>
-              </button>
+    </section>
 
 
-              <button
-                class="quick-action"
-                data-quick-page="sale"
-              >
-                <strong>💰 নতুন বিক্রি</strong>
-                <span>
-                  পণ্য বা মোট বিক্রয় এন্ট্রি
-                </span>
-              </button>
+    <!-- MAIN FINANCIAL CARDS -->
 
+    <div class="dashboard-grid">
 
-              <button
-                class="quick-action"
-                data-quick-page="products"
-              >
-                <strong>📦 পণ্য</strong>
-                <span>
-                  Product ও Stock পরিচালনা
-                </span>
-              </button>
-
-
-              <button
-                class="quick-action"
-                data-quick-page="stockVerification"
-              >
-                <strong>🔎 স্টক যাচাই</strong>
-                <span>
-                  Physical Stock মিলিয়ে দেখুন
-                </span>
-              </button>
-
-            </div>
-
-          </div>
-
-        </div>
-
-
-        <div class="card">
-
-          <div class="card-header">
-            <h3>সিস্টেম স্ট্যাটাস</h3>
-          </div>
-
-          <div class="card-body">
-
-            <p>
-              <span class="badge badge-success">
-                Online
-              </span>
-            </p>
-
-            <p>
-              Backend:
-              <strong>Cloudflare Worker</strong>
-            </p>
-
-            <p>
-              Database:
-              <strong>Cloudflare D1</strong>
-            </p>
-
-            <p>
-              হিসাব:
-              <strong>Double Entry</strong>
-            </p>
-
-          </div>
-
-        </div>
-
+      <div class="dashboard-card">
+        <span>মোট বিক্রি</span>
+        <strong id="dashSales">৳0</strong>
       </div>
 
-    `;
+      <div class="dashboard-card">
+        <span>মোট ক্রয়</span>
+        <strong id="dashPurchase">৳0</strong>
+      </div>
+
+      <div class="dashboard-card">
+        <span>গ্রস লাভ</span>
+        <strong id="dashGrossProfit">৳0</strong>
+      </div>
+
+      <div class="dashboard-card">
+        <span>নিট লাভ</span>
+        <strong id="dashNetProfit">৳0</strong>
+      </div>
+
+      <div class="dashboard-card">
+        <span>কাস্টমার বাকি</span>
+        <strong id="dashCustomerDue">৳0</strong>
+      </div>
+
+      <div class="dashboard-card">
+        <span>সাপ্লায়ার বাকি</span>
+        <strong id="dashSupplierDue">৳0</strong>
+      </div>
+
+      <div class="dashboard-card">
+        <span>বর্তমান স্টক ভেলু</span>
+        <strong id="dashStockValue">৳0</strong>
+      </div>
+
+      <div class="dashboard-card">
+        <span>পণ্য সংখ্যা</span>
+        <strong id="dashProductCount">0</strong>
+      </div>
+
+    </div>
 
 
-    document
-      .querySelectorAll("[data-quick-page]")
-      .forEach(button => {
+    <!-- CASH ACCOUNTS -->
 
-        button.addEventListener(
-          "click",
-          () => navigate(
-            button.dataset.quickPage
-          )
-        );
+    <div class="card">
 
-      });
+      <div class="section-title">
+        <h3>Cash / Digital Balance</h3>
+      </div>
 
-
-  } catch (error) {
-
-    renderError(error);
-
-  } finally {
-
-    hideLoading();
-
-  }
-
-}
-
-
-/* =========================================================
-   PRODUCTS
-   ========================================================= */
-
-async function loadProducts() {
-
-  const data = await api("/api/products");
-
-  state.products =
-    Array.isArray(data)
-      ? data
-      : data.products || [];
-
-  return state.products;
-}
-
-
-async function renderProducts() {
-
-  try {
-
-    showLoading("পণ্য লোড হচ্ছে...");
-
-    const products = await loadProducts();
-
-
-    pageActions.innerHTML = `
-      <button
-        id="newProductBtn"
-        class="btn btn-primary"
-        type="button"
+      <div
+        id="dashboardAccounts"
+        class="account-grid"
       >
-        + নতুন পণ্য
-      </button>
-    `;
-
-
-    pageContent.innerHTML = `
-
-      <div class="card">
-
-        <div class="card-header">
-
-          <h3>
-            Product List
-          </h3>
-
+        <div class="empty-state">
+          হিসাব লোড হচ্ছে...
         </div>
+      </div>
+
+    </div>
 
 
-        <div class="card-body">
+    <!-- LOW STOCK -->
 
-          <div class="toolbar">
+    <div class="card">
 
-            <div class="toolbar-left">
+      <div class="section-title">
+        <h3>Low Stock</h3>
+      </div>
 
-              <input
-                id="productSearch"
-                class="form-control search-box"
-                type="search"
-                placeholder="পণ্য খুঁজুন..."
-              >
+      <div class="table-wrap">
 
-            </div>
+        <table>
 
-            <div class="toolbar-right">
+          <thead>
+            <tr>
+              <th>পণ্য</th>
+              <th>বর্তমান স্টক</th>
+              <th>Low Stock Level</th>
+            </tr>
+          </thead>
 
-              <span class="badge badge-info">
-                মোট ${number(products.length)} পণ্য
-              </span>
+          <tbody id="dashboardLowStock">
+          </tbody>
 
-            </div>
-
-          </div>
-
-
-          <div
-            id="productTable"
-            class="table-wrapper"
-          >
-
-            ${productTableHtml(products)}
-
-          </div>
-
-        </div>
+        </table>
 
       </div>
 
-    `;
+    </div>
 
 
-    $("#newProductBtn")
-      .addEventListener(
-        "click",
-        showProductForm
-      );
+    <!-- TOP PRODUCTS -->
 
+    <div class="card">
 
-    $("#productSearch")
-      .addEventListener(
-        "input",
-        event => {
+      <div class="section-title">
+        <h3>Top Selling Products</h3>
+      </div>
 
-          const query =
-            event.target.value
-              .trim()
-              .toLowerCase();
+      <div class="table-wrap">
 
-          const filtered =
-            products.filter(product => {
+        <table>
 
-              const text = [
+          <thead>
+            <tr>
+              <th>পণ্য</th>
+              <th>বিক্রির Qty</th>
+              <th>বিক্রির মূল্য</th>
+            </tr>
+          </thead>
 
-                product.sku,
-                product.name,
-                product.unit
+          <tbody id="dashboardTopProducts">
+          </tbody>
 
-              ]
-                .join(" ")
-                .toLowerCase();
-
-              return text.includes(query);
-
-            });
-
-
-          $("#productTable").innerHTML =
-            productTableHtml(filtered);
-
-        }
-      );
-
-
-  } catch (error) {
-
-    renderError(error);
-
-  } finally {
-
-    hideLoading();
-
-  }
-
-}
-
-
-function productTableHtml(products) {
-
-  if (!products.length) {
-
-    return `
-
-      <div class="empty-state">
-
-        <div class="icon">
-          📦
-        </div>
-
-        <strong>
-          কোনো পণ্য পাওয়া যায়নি
-        </strong>
-
-        <span>
-          নতুন পণ্য যোগ করুন
-        </span>
+        </table>
 
       </div>
 
-    `;
-
-  }
+    </div>
 
 
-  return `
+    <!-- RECENT TRANSACTIONS -->
 
-    <table class="data-table">
+    <div class="card">
 
-      <thead>
+      <div class="section-title">
+        <h3>সাম্প্রতিক লেনদেন</h3>
+      </div>
 
-        <tr>
+      <div class="table-wrap">
 
-          <th>SKU</th>
-          <th>পণ্যের নাম</th>
-          <th>Unit</th>
-          <th class="text-right">
-            Stock
-          </th>
-          <th class="text-right">
-            Sale Price
-          </th>
-          <th class="text-right">
-            Stock Value
-          </th>
+        <table>
 
-        </tr>
+          <thead>
+            <tr>
+              <th>তারিখ</th>
+              <th>ধরন</th>
+              <th>Reference</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
 
-      </thead>
+          <tbody id="dashboardRecentTransactions">
+          </tbody>
 
+        </table>
 
-      <tbody>
+      </div>
 
-        ${products.map(product => `
-
-          <tr>
-
-            <td>
-              ${escapeHtml(product.sku)}
-            </td>
-
-            <td>
-              <strong>
-                ${escapeHtml(product.name)}
-              </strong>
-            </td>
-
-            <td>
-              ${escapeHtml(product.unit || "-")}
-            </td>
-
-            <td class="text-right">
-              ${number(product.current_stock ?? product.stock_qty)}
-            </td>
-
-            <td class="text-right">
-              ৳${money(
-                product.sale_price
-              )}
-            </td>
-
-            <td class="text-right">
-              ৳${money(
-                product.stock_value
-              )}
-            </td>
-
-          </tr>
-
-        `).join("")}
-
-      </tbody>
-
-    </table>
-
+    </div>
   `;
 
+
+  document
+    .getElementById("dashboardLoadBtn")
+    .addEventListener(
+      "click",
+      loadDashboard
+    );
+
+
+  await loadDashboard();
 }
 
+
+async function loadDashboard() {
+
+  const from =
+    document.getElementById(
+      "dashboardFrom"
+    ).value;
+
+  const to =
+    document.getElementById(
+      "dashboardTo"
+    ).value;
+
+
+  try {
+
+    const response =
+      await apiFetch(
+        `/api/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        "Dashboard load failed"
+      );
+
+    }
+
+
+    // --------------------------------------------------------
+    // MAIN CARDS
+    // --------------------------------------------------------
+
+    document.getElementById(
+      "dashSales"
+    ).textContent =
+      formatMoney(data.sales.total);
+
+
+    document.getElementById(
+      "dashPurchase"
+    ).textContent =
+      formatMoney(
+        data.purchases.total
+      );
+
+
+    document.getElementById(
+      "dashGrossProfit"
+    ).textContent =
+      formatMoney(
+        data.profit.gross
+      );
+
+
+    document.getElementById(
+      "dashNetProfit"
+    ).textContent =
+      formatMoney(
+        data.profit.net
+      );
+
+
+    document.getElementById(
+      "dashCustomerDue"
+    ).textContent =
+      formatMoney(
+        data.customerDue.total
+      );
+
+
+    document.getElementById(
+      "dashSupplierDue"
+    ).textContent =
+      formatMoney(
+        data.supplierDue.total
+      );
+
+
+    document.getElementById(
+      "dashStockValue"
+    ).textContent =
+      formatMoney(
+        data.stock.value
+      );
+
+
+    document.getElementById(
+      "dashProductCount"
+    ).textContent =
+      formatNumber(
+        data.stock.products
+      );
+
+
+    renderDashboardAccounts(
+      data.accounts
+    );
+
+
+    renderDashboardLowStock(
+      data.lowStock
+    );
+
+
+    renderDashboardTopProducts(
+      data.topProducts
+    );
+
+
+    renderDashboardRecentTransactions(
+      data.recentTransactions
+    );
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert(
+      error.message ||
+      "Dashboard load failed"
+    );
+
+  }
+}
+
+
+function renderDashboardAccounts(
+  accounts
+) {
+
+  const container =
+    document.getElementById(
+      "dashboardAccounts"
+    );
+
+
+  if (!accounts?.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো account পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML =
+    accounts
+      .map(account => `
+        <div class="account-card">
+
+          <span>
+            ${escapeHtml(account.name)}
+          </span>
+
+          <strong>
+            ${formatMoney(
+              account.current_balance
+            )}
+          </strong>
+
+        </div>
+      `)
+      .join("");
+}
+
+
+function renderDashboardLowStock(
+  items
+) {
+
+  const tbody =
+    document.getElementById(
+      "dashboardLowStock"
+    );
+
+
+  if (!items?.length) {
+
+    tbody.innerHTML = `
+      <tr>
+        <td
+          colspan="3"
+          class="empty-state"
+        >
+          কোনো Low Stock নেই।
+        </td>
+      </tr>
+    `;
+
+    return;
+  }
+
+
+  tbody.innerHTML =
+    items
+      .map(item => `
+        <tr>
+
+          <td>
+            ${escapeHtml(item.name)}
+          </td>
+
+          <td>
+            ${formatNumber(
+              item.current_stock
+            )}
+          </td>
+
+          <td>
+            ${formatNumber(
+              item.low_stock_level
+            )}
+          </td>
+
+        </tr>
+      `)
+      .join("");
+}
+
+
+function renderDashboardTopProducts(
+  items
+) {
+
+  const tbody =
+    document.getElementById(
+      "dashboardTopProducts"
+    );
+
+
+  if (!items?.length) {
+
+    tbody.innerHTML = `
+      <tr>
+        <td
+          colspan="3"
+          class="empty-state"
+        >
+          কোনো বিক্রির তথ্য নেই।
+        </td>
+      </tr>
+    `;
+
+    return;
+  }
+
+
+  tbody.innerHTML =
+    items
+      .map(item => `
+        <tr>
+
+          <td>
+            ${escapeHtml(item.name)}
+          </td>
+
+          <td>
+            ${formatNumber(
+              item.quantity_sold
+            )}
+          </td>
+
+          <td>
+            ${formatMoney(
+              item.sales_value
+            )}
+          </td>
+
+        </tr>
+      `)
+      .join("");
+}
+
+
+function renderDashboardRecentTransactions(
+  items
+) {
+
+  const tbody =
+    document.getElementById(
+      "dashboardRecentTransactions"
+    );
+
+
+  if (!items?.length) {
+
+    tbody.innerHTML = `
+      <tr>
+        <td
+          colspan="4"
+          class="empty-state"
+        >
+          কোনো transaction নেই।
+        </td>
+      </tr>
+    `;
+
+    return;
+  }
+
+
+  tbody.innerHTML =
+    items
+      .map(item => `
+        <tr>
+
+          <td>
+            ${escapeHtml(
+              item.transaction_date || ""
+            )}
+          </td>
+
+          <td>
+            ${escapeHtml(
+              transactionTypeLabel(
+                item.transaction_type
+              )
+            )}
+          </td>
+
+          <td>
+            ${escapeHtml(
+              item.reference || "-"
+            )}
+          </td>
+
+          <td>
+            ${formatMoney(
+              item.total_amount || 0
+            )}
+          </td>
+
+        </tr>
+      `)
+      .join("");
+}
+
+
+function transactionTypeLabel(
+  type
+) {
+
+  const labels = {
+
+    PURCHASE:
+      "ক্রয়",
+
+    SALE:
+      "বিক্রি",
+
+    CUSTOMER_COLLECTION:
+      "কাস্টমার কালেকশন",
+
+    SUPPLIER_PAYMENT:
+      "সাপ্লায়ার পেমেন্ট",
+
+    EXPENSE:
+      "খরচ",
+
+    OTHER_INCOME:
+      "অন্যান্য আয়",
+
+    STOCK_ADJUSTMENT:
+      "স্টক Adjustment",
+
+    ACCOUNT_TRANSFER:
+      "Account Transfer"
+
+  };
+
+
+  return labels[type] || type || "-";
+}
 
 /* =========================================================
    PRODUCT FORM
