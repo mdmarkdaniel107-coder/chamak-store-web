@@ -1,1 +1,237 @@
-<!doctype html><html lang="bn"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CHAMAK STORE</title><link rel="stylesheet" href="/app.css"></head><body><header><h1>চমক স্টোর</h1><span>Business Web App</span></header><nav><button data-page="dashboard">Dashboard</button><button data-page="products">পণ্য</button><button data-page="sales">বিক্রি</button><button data-page="purchases">ক্রয়</button><button data-page="customers">কাস্টমার</button><button data-page="suppliers">সরবরাহকারী</button><button data-page="expenses">খরচ</button><button data-page="cash">নগদ</button></nav><main id="app"></main><script src="/app.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+  >
+
+  <title>চমক স্টোর ২ — ব্যবসার হিসাব</title>
+
+  <link rel="stylesheet" href="/app.css">
+</head>
+
+<body>
+
+  <div id="app">
+
+    <!-- ================= HEADER ================= -->
+
+    <header class="topbar">
+
+      <div class="brand">
+        <button
+          id="mobileMenuBtn"
+          class="icon-btn mobile-only"
+          type="button"
+          aria-label="Menu"
+        >
+          ☰
+        </button>
+
+        <div>
+          <h1>চমক স্টোর ২</h1>
+          <span>ব্যবসার হিসাব</span>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button
+          id="refreshBtn"
+          class="btn btn-light"
+          type="button"
+        >
+          ↻ আপডেট
+        </button>
+      </div>
+
+    </header>
+
+
+    <!-- ================= LAYOUT ================= -->
+
+    <div class="layout">
+
+      <!-- ================= SIDEBAR ================= -->
+
+      <aside id="sidebar" class="sidebar">
+
+        <nav class="nav">
+
+          <button
+            class="nav-item active"
+            data-page="dashboard"
+            type="button"
+          >
+            <span>📊</span>
+            <span>ড্যাশবোর্ড</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="products"
+            type="button"
+          >
+            <span>📦</span>
+            <span>পণ্য</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="purchase"
+            type="button"
+          >
+            <span>🛒</span>
+            <span>ক্রয়</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="sale"
+            type="button"
+          >
+            <span>💰</span>
+            <span>বিক্রি</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="customers"
+            type="button"
+          >
+            <span>👥</span>
+            <span>কাস্টমার</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="suppliers"
+            type="button"
+          >
+            <span>🏪</span>
+            <span>সাপ্লায়ার</span>
+          </button>
+
+          <div class="nav-divider"></div>
+
+          <button
+            class="nav-item"
+            data-page="stockVerification"
+            type="button"
+          >
+            <span>🔎</span>
+            <span>স্টক ভেলু যাচাই</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="customerDue"
+            type="button"
+          >
+            <span>📒</span>
+            <span>কাস্টমার বাকি</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="supplierDue"
+            type="button"
+          >
+            <span>📕</span>
+            <span>সাপ্লায়ার বাকি</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="expenses"
+            type="button"
+          >
+            <span>💸</span>
+            <span>খরচ</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="accounts"
+            type="button"
+          >
+            <span>🏦</span>
+            <span>হিসাব</span>
+          </button>
+
+          <button
+            class="nav-item"
+            data-page="settings"
+            type="button"
+          >
+            <span>⚙️</span>
+            <span>সেটিংস</span>
+          </button>
+
+        </nav>
+
+      </aside>
+
+
+      <!-- ================= MAIN ================= -->
+
+      <main class="main">
+
+        <!-- PAGE HEADER -->
+
+        <section class="page-header">
+
+          <div>
+            <h2 id="pageTitle">ড্যাশবোর্ড</h2>
+            <p id="pageSubtitle">
+              ব্যবসার বর্তমান অবস্থা
+            </p>
+          </div>
+
+          <div id="pageActions"></div>
+
+        </section>
+
+
+        <!-- ================= PAGE CONTENT ================= -->
+
+        <section id="pageContent" class="page-content">
+
+          <!-- Dashboard will load here -->
+
+        </section>
+
+      </main>
+
+    </div>
+
+
+    <!-- ================= TOAST ================= -->
+
+    <div
+      id="toast"
+      class="toast"
+      role="status"
+      aria-live="polite"
+    ></div>
+
+
+    <!-- ================= LOADING ================= -->
+
+    <div id="loadingOverlay" class="loading-overlay hidden">
+
+      <div class="loading-box">
+        <div class="spinner"></div>
+        <div id="loadingText">লোড হচ্ছে...</div>
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <script type="module" src="/app.js"></script>
+
+</body>
+</html>
