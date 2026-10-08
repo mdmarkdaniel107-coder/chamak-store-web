@@ -4,6 +4,7 @@ import {
   ACCOUNT,
   createPurchase,
   createSale,
+  createDirectSale,
   createCustomerCollection,
   createSupplierPayment,
   createExpense,
@@ -11,6 +12,7 @@ import {
   createStockAdjustment,
   createAccountTransfer
 } from "./services/transactionEngine.js";
+
 import {
   createProduct,
   getProduct,
@@ -27,9 +29,9 @@ import {
   updateSupplier,
   deleteSupplier
 } from "./services/masterDataService.js";
+
 import {
   getSettings,
-  getSetting,
   saveSetting,
   writeAuditLog,
   getAuditLogs,
@@ -37,64 +39,134 @@ import {
   restoreBackup
 } from "./services/systemService.js";
 
+import {
+  runIntegrityCheck
+} from "./services/integrityService.js";
+
+
+/* =========================================================
+   SECURITY / CORS
+========================================================= */
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods":
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, X-Idempotency-Key"
+};
+
+
 /* =========================================================
    RESPONSE HELPERS
 ========================================================= */
 
-function json(data, status = 200) {
+function json(
+  data,
+  status = 200,
+  extraHeaders = {}
+) {
   return new Response(
     JSON.stringify(data),
     {
       status,
       headers: {
-        "Content-Type": "application/json; charset=UTF-8",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods":
-          "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers":
-          "Content-Type, Authorization, X-Idempotency-Key"
+        "Content-Type":
+          "application/json; charset=UTF-8",
+
+        "Cache-Control":
+          "no-store",
+
+        "X-Content-Type-Options":
+          "nosniff",
+
+        "X-Frame-Options":
+          "DENY",
+
+        "Referrer-Policy":
+          "no-referrer",
+
+        ...corsHeaders,
+        ...extraHeaders
       }
     }
   );
 }
 
 
-function errorResponse(error, status = 400) {
+/*
+ * Existing code compatibility.
+ *
+ * আগের কিছু route-এ jsonResponse()
+ * ব্যবহার করা হয়েছিল।
+ */
+const jsonResponse = json;
+
+
+function errorResponse(
+  error,
+  status = 400
+) {
   return json(
     {
       success: false,
-      error: error?.message || String(error)
+      error:
+        error?.message ||
+        String(error)
     },
     status
   );
 }
 
 
-async function readJSON(request) {
-  try {
-    return await request.json();
-  } catch {
-    throw new Error("Invalid JSON request body");
-  }
+function corsResponse() {
+  return new Response(
+    null,
+    {
+      status: 204,
+      headers: {
+        ...corsHeaders,
+        "Access-Control-Max-Age":
+          "86400"
+      }
+    }
+  );
 }
 
 
 /* =========================================================
-   CORS
+   REQUEST HELPERS
 ========================================================= */
 
-function corsResponse() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods":
-        "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers":
-        "Content-Type, Authorization, X-Idempotency-Key",
-      "Access-Control-Max-Age": "86400"
-    }
-  });
+async function readJSON(request) {
+  try {
+    return await request.json();
+  } catch {
+    throw new Error(
+      "Invalid JSON request body"
+    );
+  }
+}
+
+
+function getIdempotencyKey(
+  request,
+  body
+) {
+  return (
+    request.headers.get(
+      "X-Idempotency-Key"
+    ) ||
+    body?.idempotency_key ||
+    null
+  );
+}
+
+
+function today() {
+  return new Date()
+    .toISOString()
+    .slice(0, 10);
 }
 
 
@@ -102,7 +174,11 @@ function corsResponse() {
    DATABASE HELPERS
 ========================================================= */
 
-async function getOne(db, sql, params = []) {
+async function getOne(
+  db,
+  sql,
+  params = []
+) {
   return await db
     .prepare(sql)
     .bind(...params)
@@ -110,17 +186,26 @@ async function getOne(db, sql, params = []) {
 }
 
 
-async function getAll(db, sql, params = []) {
-  const result = await db
-    .prepare(sql)
-    .bind(...params)
-    .all();
+async function getAll(
+  db,
+  sql,
+  params = []
+) {
+  const result =
+    await db
+      .prepare(sql)
+      .bind(...params)
+      .all();
 
   return result.results || [];
 }
 
 
-async function run(db, sql, params = []) {
+async function run(
+  db,
+  sql,
+  params = []
+) {
   return await db
     .prepare(sql)
     .bind(...params)
@@ -129,476 +214,588 @@ async function run(db, sql, params = []) {
 
 
 /* =========================================================
-   IDEMPOTENCY KEY
+   DASHBOARD
 ========================================================= */
 
-function getIdempotencyKey(request, body) {
-  return (
-    request.headers.get("X-Idempotency-Key") ||
-    body?.idempotency_key ||
-    null
-  );
-}
-
-// ============================================================
-// STEP 12 — DASHBOARD + REPORTS API
-// ============================================================
-
-if (
-  request.method === "GET" &&
-  pathname === "/api/dashboard"
+async function dashboard(
+  db,
+  url
 ) {
-  try {
 
-    const url = new URL(request.url);
+  const from =
+    url.searchParams.get("from") ||
+    today();
 
-    const from =
-      url.searchParams.get("from") ||
-      new Date().toISOString().slice(0, 10);
-
-    const to =
-      url.searchParams.get("to") ||
-      from;
-
-    // --------------------------------------------------------
-    // 1. SALES
-    // --------------------------------------------------------
-
-    const sales = await env.DB.prepare(`
-      SELECT
-        COUNT(*) AS invoice_count,
-        COALESCE(SUM(total_amount), 0) AS total_sales,
-        COALESCE(SUM(paid_amount), 0) AS paid_sales,
-        COALESCE(SUM(due_amount), 0) AS due_sales
-      FROM sales
-      WHERE sale_date BETWEEN ? AND ?
-    `)
-      .bind(from, to)
-      .first();
+  const to =
+    url.searchParams.get("to") ||
+    from;
 
 
-    // --------------------------------------------------------
-    // 2. PURCHASE
-    // --------------------------------------------------------
+  /* -------------------------------------------------------
+     SALES
+  ------------------------------------------------------- */
 
-    const purchases = await env.DB.prepare(`
-      SELECT
-        COUNT(*) AS invoice_count,
-        COALESCE(SUM(total_amount), 0) AS total_purchase,
-        COALESCE(SUM(paid_amount), 0) AS paid_purchase,
-        COALESCE(SUM(due_amount), 0) AS due_purchase
-      FROM purchases
-      WHERE purchase_date BETWEEN ? AND ?
-    `)
-      .bind(from, to)
-      .first();
-
-
-    // --------------------------------------------------------
-    // 3. EXPENSE
-    // --------------------------------------------------------
-
-    const expenses = await env.DB.prepare(`
-      SELECT
-        COALESCE(SUM(amount), 0) AS total_expense
-      FROM expenses
-      WHERE expense_date BETWEEN ? AND ?
-    `)
-      .bind(from, to)
-      .first();
+  const sales =
+    await getOne(
+      db,
+      `
+        SELECT
+          COUNT(*) AS invoice_count,
+          COALESCE(
+            SUM(total_amount),
+            0
+          ) AS total_sales,
+          COALESCE(
+            SUM(paid_amount),
+            0
+          ) AS paid_sales,
+          COALESCE(
+            SUM(due_amount),
+            0
+          ) AS due_sales
+        FROM sales
+        WHERE sale_date BETWEEN ? AND ?
+      `,
+      [from, to]
+    );
 
 
-    // --------------------------------------------------------
-    // 4. CUSTOMER COLLECTION
-    // --------------------------------------------------------
+  /* -------------------------------------------------------
+     PURCHASES
+  ------------------------------------------------------- */
 
-    const collections = await env.DB.prepare(`
-      SELECT
-        COALESCE(SUM(amount), 0) AS total_collection
-      FROM customer_collections
-      WHERE collection_date BETWEEN ? AND ?
-    `)
-      .bind(from, to)
-      .first();
-
-
-    // --------------------------------------------------------
-    // 5. SUPPLIER PAYMENT
-    // --------------------------------------------------------
-
-    const supplierPayments = await env.DB.prepare(`
-      SELECT
-        COALESCE(SUM(amount), 0) AS total_supplier_payment
-      FROM supplier_payments
-      WHERE payment_date BETWEEN ? AND ?
-    `)
-      .bind(from, to)
-      .first();
-
-
-    // --------------------------------------------------------
-    // 6. OTHER INCOME
-    // --------------------------------------------------------
-
-    const otherIncome = await env.DB.prepare(`
-      SELECT
-        COALESCE(SUM(amount), 0) AS total_other_income
-      FROM other_income
-      WHERE income_date BETWEEN ? AND ?
-    `)
-      .bind(from, to)
-      .first();
+  const purchases =
+    await getOne(
+      db,
+      `
+        SELECT
+          COUNT(*) AS invoice_count,
+          COALESCE(
+            SUM(total_amount),
+            0
+          ) AS total_purchase,
+          COALESCE(
+            SUM(paid_amount),
+            0
+          ) AS paid_purchase,
+          COALESCE(
+            SUM(due_amount),
+            0
+          ) AS due_purchase
+        FROM purchases
+        WHERE purchase_date BETWEEN ? AND ?
+      `,
+      [from, to]
+    );
 
 
-    // --------------------------------------------------------
-    // 7. CURRENT CUSTOMER DUE
-    // --------------------------------------------------------
+  /* -------------------------------------------------------
+     EXPENSE
+  ------------------------------------------------------- */
 
-    const customerDue = await env.DB.prepare(`
-      SELECT
-        COALESCE(SUM(current_due), 0) AS total_customer_due,
-        COUNT(*) AS customers_with_due
-      FROM customers
-      WHERE current_due > 0
-    `)
-      .first();
-
-
-    // --------------------------------------------------------
-    // 8. CURRENT SUPPLIER DUE
-    // --------------------------------------------------------
-
-    const supplierDue = await env.DB.prepare(`
-      SELECT
-        COALESCE(SUM(current_due), 0) AS total_supplier_due,
-        COUNT(*) AS suppliers_with_due
-      FROM suppliers
-      WHERE current_due > 0
-    `)
-      .first();
+  const expenses =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(amount),
+            0
+          ) AS total_expense
+        FROM expenses
+        WHERE expense_date BETWEEN ? AND ?
+      `,
+      [from, to]
+    );
 
 
-    // --------------------------------------------------------
-    // 9. CURRENT STOCK
-    // --------------------------------------------------------
+  /* -------------------------------------------------------
+     CUSTOMER COLLECTION
+  ------------------------------------------------------- */
 
-    const stock = await env.DB.prepare(`
-      SELECT
-        COALESCE(
-          SUM(
-            current_stock *
-            COALESCE(last_purchase_cost, 0)
-          ),
-          0
-        ) AS stock_value,
-
-        COALESCE(
-          SUM(current_stock),
-          0
-        ) AS total_quantity,
-
-        COUNT(*) AS product_count
-
-      FROM products
-      WHERE is_active = 1
-    `)
-      .first();
+  const collections =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(amount),
+            0
+          ) AS total_collection
+        FROM customer_collections
+        WHERE collection_date BETWEEN ? AND ?
+      `,
+      [from, to]
+    );
 
 
-    // --------------------------------------------------------
-    // 10. LOW STOCK
-    // --------------------------------------------------------
+  /* -------------------------------------------------------
+     SUPPLIER PAYMENT
+  ------------------------------------------------------- */
 
-    const lowStock = await env.DB.prepare(`
-      SELECT
-        id,
-        name,
-        current_stock,
-        low_stock_level
-      FROM products
-      WHERE
-        is_active = 1
-        AND current_stock <= low_stock_level
-      ORDER BY current_stock ASC
-      LIMIT 20
-    `)
-      .all();
-
-
-    // --------------------------------------------------------
-    // 11. TOP SELLING PRODUCTS
-    // --------------------------------------------------------
-
-    const topProducts = await env.DB.prepare(`
-      SELECT
-        p.id,
-        p.name,
-
-        COALESCE(
-          SUM(si.quantity),
-          0
-        ) AS quantity_sold,
-
-        COALESCE(
-          SUM(si.line_total),
-          0
-        ) AS sales_value
-
-      FROM sale_items si
-
-      INNER JOIN sales s
-        ON s.id = si.sale_id
-
-      INNER JOIN products p
-        ON p.id = si.product_id
-
-      WHERE
-        s.sale_date BETWEEN ? AND ?
-
-      GROUP BY
-        p.id,
-        p.name
-
-      ORDER BY
-        quantity_sold DESC
-
-      LIMIT 10
-    `)
-      .bind(from, to)
-      .all();
+  const supplierPayments =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(amount),
+            0
+          ) AS total_supplier_payment
+        FROM supplier_payments
+        WHERE payment_date BETWEEN ? AND ?
+      `,
+      [from, to]
+    );
 
 
-    // --------------------------------------------------------
-    // 12. RECENT TRANSACTIONS
-    // --------------------------------------------------------
+  /* -------------------------------------------------------
+     OTHER INCOME
+  ------------------------------------------------------- */
 
-    const recentTransactions =
-      await env.DB.prepare(`
+  const otherIncome =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(amount),
+            0
+          ) AS total_other_income
+        FROM other_income
+        WHERE income_date BETWEEN ? AND ?
+      `,
+      [from, to]
+    );
+
+
+  /* -------------------------------------------------------
+     CUSTOMER DUE
+  ------------------------------------------------------- */
+
+  const customerDue =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(current_due),
+            0
+          ) AS total_customer_due,
+
+          COUNT(*) AS customers_with_due
+
+        FROM customers
+        WHERE current_due > 0
+      `
+    );
+
+
+  /* -------------------------------------------------------
+     SUPPLIER DUE
+  ------------------------------------------------------- */
+
+  const supplierDue =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(current_due),
+            0
+          ) AS total_supplier_due,
+
+          COUNT(*) AS suppliers_with_due
+
+        FROM suppliers
+        WHERE current_due > 0
+      `
+    );
+
+
+  /* -------------------------------------------------------
+     STOCK
+  ------------------------------------------------------- */
+
+  const stock =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(
+              current_stock *
+              COALESCE(
+                last_purchase_cost,
+                0
+              )
+            ),
+            0
+          ) AS stock_value,
+
+          COALESCE(
+            SUM(current_stock),
+            0
+          ) AS total_quantity,
+
+          COUNT(*) AS product_count
+
+        FROM products
+
+        WHERE is_active = 1
+      `
+    );
+
+
+  /* -------------------------------------------------------
+     LOW STOCK
+  ------------------------------------------------------- */
+
+  const lowStock =
+    await getAll(
+      db,
+      `
+        SELECT
+          id,
+          name,
+          current_stock,
+          low_stock_level
+
+        FROM products
+
+        WHERE
+          is_active = 1
+          AND current_stock <=
+              low_stock_level
+
+        ORDER BY
+          current_stock ASC
+
+        LIMIT 20
+      `
+    );
+
+
+  /* -------------------------------------------------------
+     TOP PRODUCTS
+  ------------------------------------------------------- */
+
+  const topProducts =
+    await getAll(
+      db,
+      `
+        SELECT
+          p.id,
+          p.name,
+
+          COALESCE(
+            SUM(si.quantity),
+            0
+          ) AS quantity_sold,
+
+          COALESCE(
+            SUM(si.line_total),
+            0
+          ) AS sales_value
+
+        FROM sale_items si
+
+        INNER JOIN sales s
+          ON s.id = si.sale_id
+
+        INNER JOIN products p
+          ON p.id = si.product_id
+
+        WHERE
+          s.sale_date
+          BETWEEN ? AND ?
+
+        GROUP BY
+          p.id,
+          p.name
+
+        ORDER BY
+          quantity_sold DESC
+
+        LIMIT 10
+      `,
+      [from, to]
+    );
+
+
+  /* -------------------------------------------------------
+     RECENT TRANSACTIONS
+  ------------------------------------------------------- */
+
+  const recentTransactions =
+    await getAll(
+      db,
+      `
         SELECT
           id,
           transaction_type,
           transaction_date,
           reference,
           total_amount
+
         FROM transactions
-        ORDER BY created_at DESC
+
+        ORDER BY
+          created_at DESC
+
         LIMIT 20
-      `)
-      .all();
+      `
+    );
 
 
-    // --------------------------------------------------------
-    // 13. PROFIT
-    //
-    // Sales - COGS - Shop Expense
-    //
-    // এখানে Family Expense ব্যবসার profit থেকে
-    // বাদ দেওয়া হচ্ছে না।
-    // --------------------------------------------------------
+  /* -------------------------------------------------------
+     COGS
+  ------------------------------------------------------- */
 
-    const cogs = await env.DB.prepare(`
-      SELECT
-        COALESCE(
-          SUM(
-            ABS(le.debit_amount)
-          ),
-          0
-        ) AS total_cogs
+  const cogs =
+    await getOne(
+      db,
+      `
+        SELECT
+          COALESCE(
+            SUM(
+              le.debit_amount
+            ),
+            0
+          ) AS total_cogs
 
-      FROM ledger_entries le
+        FROM ledger_entries le
 
-      INNER JOIN transactions t
-        ON t.id = le.transaction_id
+        INNER JOIN transactions t
+          ON t.id =
+             le.transaction_id
 
-      WHERE
-        t.transaction_date BETWEEN ? AND ?
-        AND le.account_id = 5000
-    `)
-      .bind(from, to)
-      .first();
+        WHERE
+          t.transaction_date
+          BETWEEN ? AND ?
 
-
-    const totalSales =
-      Number(sales?.total_sales || 0);
-
-    const totalCOGS =
-      Number(cogs?.total_cogs || 0);
-
-    const totalExpense =
-      Number(expenses?.total_expense || 0);
-
-    const totalOtherIncome =
-      Number(otherIncome?.total_other_income || 0);
-
-    const grossProfit =
-      totalSales - totalCOGS;
-
-    const netProfit =
-      grossProfit -
-      totalExpense +
-      totalOtherIncome;
+          AND le.account_id = 5000
+      `,
+      [from, to]
+    );
 
 
-    // --------------------------------------------------------
-    // 14. CASH / ACCOUNT BALANCES
-    // --------------------------------------------------------
+  const totalSales =
+    Number(
+      sales?.total_sales || 0
+    );
 
-    const accountBalances =
-      await env.DB.prepare(`
+  const totalCOGS =
+    Number(
+      cogs?.total_cogs || 0
+    );
+
+  const totalExpense =
+    Number(
+      expenses?.total_expense || 0
+    );
+
+  const totalOtherIncome =
+    Number(
+      otherIncome?.total_other_income ||
+      0
+    );
+
+
+  const grossProfit =
+    totalSales -
+    totalCOGS;
+
+
+  const netProfit =
+    grossProfit -
+    totalExpense +
+    totalOtherIncome;
+
+
+  /* -------------------------------------------------------
+     ACCOUNTS
+  ------------------------------------------------------- */
+
+  const accountBalances =
+    await getAll(
+      db,
+      `
         SELECT
           id,
           code,
           name,
-          account_type,
+          type,
           current_balance
+
         FROM accounts
+
         WHERE is_active = 1
+
         ORDER BY id
-      `)
-      .all();
-
-
-    return jsonResponse({
-      success: true,
-
-      period: {
-        from,
-        to
-      },
-
-      sales: {
-        invoices:
-          Number(sales?.invoice_count || 0),
-
-        total:
-          totalSales,
-
-        paid:
-          Number(sales?.paid_sales || 0),
-
-        due:
-          Number(sales?.due_sales || 0)
-      },
-
-      purchases: {
-        invoices:
-          Number(purchases?.invoice_count || 0),
-
-        total:
-          Number(purchases?.total_purchase || 0),
-
-        paid:
-          Number(purchases?.paid_purchase || 0),
-
-        due:
-          Number(purchases?.due_purchase || 0)
-      },
-
-      collections:
-        Number(
-          collections?.total_collection || 0
-        ),
-
-      supplierPayments:
-        Number(
-          supplierPayments?.total_supplier_payment || 0
-        ),
-
-      expenses:
-        totalExpense,
-
-      otherIncome:
-        totalOtherIncome,
-
-      profit: {
-        gross:
-          grossProfit,
-
-        net:
-          netProfit,
-
-        cogs:
-          totalCOGS
-      },
-
-      customerDue: {
-        total:
-          Number(
-            customerDue?.total_customer_due || 0
-          ),
-
-        customers:
-          Number(
-            customerDue?.customers_with_due || 0
-          )
-      },
-
-      supplierDue: {
-        total:
-          Number(
-            supplierDue?.total_supplier_due || 0
-          ),
-
-        suppliers:
-          Number(
-            supplierDue?.suppliers_with_due || 0
-          )
-      },
-
-      stock: {
-        value:
-          Number(stock?.stock_value || 0),
-
-        quantity:
-          Number(stock?.total_quantity || 0),
-
-        products:
-          Number(stock?.product_count || 0)
-      },
-
-      lowStock:
-        lowStock.results || [],
-
-      topProducts:
-        topProducts.results || [],
-
-      recentTransactions:
-        recentTransactions.results || [],
-
-      accounts:
-        accountBalances.results || []
-
-    });
-
-  } catch (error) {
-
-    console.error(
-      "Dashboard error:",
-      error
+      `
     );
 
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Dashboard load failed"
-      },
-      500
-    );
-  }
+
+  return {
+    success: true,
+
+    period: {
+      from,
+      to
+    },
+
+    sales: {
+      invoices:
+        Number(
+          sales?.invoice_count || 0
+        ),
+
+      total:
+        totalSales,
+
+      paid:
+        Number(
+          sales?.paid_sales || 0
+        ),
+
+      due:
+        Number(
+          sales?.due_sales || 0
+        )
+    },
+
+    purchases: {
+      invoices:
+        Number(
+          purchases?.invoice_count || 0
+        ),
+
+      total:
+        Number(
+          purchases?.total_purchase || 0
+        ),
+
+      paid:
+        Number(
+          purchases?.paid_purchase || 0
+        ),
+
+      due:
+        Number(
+          purchases?.due_purchase || 0
+        )
+    },
+
+    collections:
+      Number(
+        collections?.total_collection ||
+        0
+      ),
+
+    supplierPayments:
+      Number(
+        supplierPayments
+          ?.total_supplier_payment ||
+        0
+      ),
+
+    expenses:
+      totalExpense,
+
+    otherIncome:
+      totalOtherIncome,
+
+    profit: {
+      gross:
+        grossProfit,
+
+      net:
+        netProfit,
+
+      cogs:
+        totalCOGS
+    },
+
+    customerDue: {
+      total:
+        Number(
+          customerDue
+            ?.total_customer_due ||
+          0
+        ),
+
+      customers:
+        Number(
+          customerDue
+            ?.customers_with_due ||
+          0
+        )
+    },
+
+    supplierDue: {
+      total:
+        Number(
+          supplierDue
+            ?.total_supplier_due ||
+          0
+        ),
+
+      suppliers:
+        Number(
+          supplierDue
+            ?.suppliers_with_due ||
+          0
+        )
+    },
+
+    stock: {
+      value:
+        Number(
+          stock?.stock_value || 0
+        ),
+
+      quantity:
+        Number(
+          stock?.total_quantity || 0
+        ),
+
+      products:
+        Number(
+          stock?.product_count || 0
+        )
+    },
+
+    lowStock,
+
+    topProducts,
+
+    recentTransactions,
+
+    accounts:
+      accountBalances
+  };
 }
 
 
 /* =========================================================
-   PRODUCTS
+   PRODUCT LIST
 ========================================================= */
 
-async function listProducts(db, url) {
+async function listProducts(
+  db,
+  url
+) {
+
   const search =
-    url.searchParams.get("search")?.trim() || "";
+    url.searchParams
+      .get("search")
+      ?.trim() || "";
 
   const lowStock =
-    url.searchParams.get("low_stock") === "1";
+    url.searchParams
+      .get("low_stock") === "1";
+
 
   let sql = `
     SELECT
@@ -613,13 +810,17 @@ async function listProducts(db, url) {
       low_stock_level,
       created_at,
       updated_at
+
     FROM products
   `;
 
-  const params = [];
+
   const conditions = [];
+  const params = [];
+
 
   if (search) {
+
     conditions.push(`
       (
         name LIKE ?
@@ -627,31 +828,49 @@ async function listProducts(db, url) {
       )
     `);
 
-    const value = `%${search}%`;
+    const value =
+      `%${search}%`;
 
-    params.push(value, value);
+    params.push(
+      value,
+      value
+    );
   }
 
+
   if (lowStock) {
+
     conditions.push(`
-      current_stock <= low_stock_level
+      current_stock <=
+      low_stock_level
     `);
   }
 
+
   if (conditions.length) {
-    sql += ` WHERE ${conditions.join(" AND ")} `;
+
+    sql +=
+      ` WHERE ${conditions.join(
+        " AND "
+      )} `;
   }
 
+
   sql += `
-    ORDER BY name COLLATE NOCASE ASC
+    ORDER BY
+      name COLLATE NOCASE ASC
+
     LIMIT 1000
   `;
 
-  const products = await getAll(
-    db,
-    sql,
-    params
-  );
+
+  const products =
+    await getAll(
+      db,
+      sql,
+      params
+    );
+
 
   return json({
     success: true,
@@ -661,12 +880,19 @@ async function listProducts(db, url) {
 
 
 /* =========================================================
-   CUSTOMERS
+   CUSTOMER LIST
 ========================================================= */
 
-async function listCustomers(db, url) {
+async function listCustomers(
+  db,
+  url
+) {
+
   const search =
-    url.searchParams.get("search")?.trim() || "";
+    url.searchParams
+      .get("search")
+      ?.trim() || "";
+
 
   let sql = `
     SELECT
@@ -677,33 +903,47 @@ async function listCustomers(db, url) {
       current_due,
       created_at,
       updated_at
+
     FROM customers
   `;
 
+
   const params = [];
 
+
   if (search) {
+
     sql += `
       WHERE
         name LIKE ?
         OR phone LIKE ?
     `;
 
-    const value = `%${search}%`;
+    const value =
+      `%${search}%`;
 
-    params.push(value, value);
+    params.push(
+      value,
+      value
+    );
   }
 
+
   sql += `
-    ORDER BY name COLLATE NOCASE ASC
+    ORDER BY
+      name COLLATE NOCASE ASC
+
     LIMIT 1000
   `;
 
-  const customers = await getAll(
-    db,
-    sql,
-    params
-  );
+
+  const customers =
+    await getAll(
+      db,
+      sql,
+      params
+    );
+
 
   return json({
     success: true,
@@ -713,12 +953,19 @@ async function listCustomers(db, url) {
 
 
 /* =========================================================
-   SUPPLIERS
+   SUPPLIER LIST
 ========================================================= */
 
-async function listSuppliers(db, url) {
+async function listSuppliers(
+  db,
+  url
+) {
+
   const search =
-    url.searchParams.get("search")?.trim() || "";
+    url.searchParams
+      .get("search")
+      ?.trim() || "";
+
 
   let sql = `
     SELECT
@@ -729,33 +976,47 @@ async function listSuppliers(db, url) {
       current_due,
       created_at,
       updated_at
+
     FROM suppliers
   `;
 
+
   const params = [];
 
+
   if (search) {
+
     sql += `
       WHERE
         name LIKE ?
         OR phone LIKE ?
     `;
 
-    const value = `%${search}%`;
+    const value =
+      `%${search}%`;
 
-    params.push(value, value);
+    params.push(
+      value,
+      value
+    );
   }
 
+
   sql += `
-    ORDER BY name COLLATE NOCASE ASC
+    ORDER BY
+      name COLLATE NOCASE ASC
+
     LIMIT 1000
   `;
 
-  const suppliers = await getAll(
-    db,
-    sql,
-    params
-  );
+
+  const suppliers =
+    await getAll(
+      db,
+      sql,
+      params
+    );
+
 
   return json({
     success: true,
@@ -768,22 +1029,30 @@ async function listSuppliers(db, url) {
    ACCOUNTS
 ========================================================= */
 
-async function listAccounts(db) {
-  const accounts = await getAll(
-    db,
-    `
-      SELECT
-        id,
-        code,
-        name,
-        type,
-        current_balance,
-        is_active
-      FROM accounts
-      WHERE is_active = 1
-      ORDER BY code
-    `
-  );
+async function listAccounts(
+  db
+) {
+
+  const accounts =
+    await getAll(
+      db,
+      `
+        SELECT
+          id,
+          code,
+          name,
+          type,
+          current_balance,
+          is_active
+
+        FROM accounts
+
+        WHERE is_active = 1
+
+        ORDER BY code
+      `
+    );
+
 
   return json({
     success: true,
@@ -793,12 +1062,19 @@ async function listAccounts(db) {
 
 
 /* =========================================================
-   STOCK VERIFICATION
+   STOCK VERIFICATION LIST
 ========================================================= */
 
-async function stockVerification(db, url) {
+async function stockVerification(
+  db,
+  url
+) {
+
   const search =
-    url.searchParams.get("search")?.trim() || "";
+    url.searchParams
+      .get("search")
+      ?.trim() || "";
+
 
   let sql = `
     SELECT
@@ -807,219 +1083,664 @@ async function stockVerification(db, url) {
       name,
       current_stock,
       last_purchase_cost,
+
       ROUND(
-        current_stock * COALESCE(last_purchase_cost, 0)
+        current_stock *
+        COALESCE(
+          last_purchase_cost,
+          0
+        )
       ) AS expected_stock_value
+
     FROM products
   `;
 
+
   const params = [];
 
+
   if (search) {
+
     sql += `
       WHERE
         name LIKE ?
         OR sku LIKE ?
     `;
 
-    const value = `%${search}%`;
+    const value =
+      `%${search}%`;
 
-    params.push(value, value);
+    params.push(
+      value,
+      value
+    );
   }
 
+
   sql += `
-    ORDER BY name COLLATE NOCASE ASC
+    ORDER BY
+      name COLLATE NOCASE ASC
+
     LIMIT 1000
   `;
 
-  const products = await getAll(
-    db,
-    sql,
-    params
-  );
+
+  const products =
+    await getAll(
+      db,
+      sql,
+      params
+    );
+
 
   return json({
     success: true,
     products
   });
 }
-// ============================================================
-// STOCK VERIFICATION — SAVE SNAPSHOT
-// ============================================================
 
-if (
-  request.method === "POST" &&
-  pathname === "/api/stock-verification"
+
+/* =========================================================
+   CUSTOMER LEDGER
+========================================================= */
+
+async function customerLedger(
+  db,
+  customerId
 ) {
 
-  try {
+  const customer =
+    await getOne(
+      db,
+      `
+        SELECT
+          id,
+          name,
+          phone,
+          current_due
 
-    const body = await request.json();
+        FROM customers
 
-    const verificationDate =
-      body.verification_date ||
-      new Date().toISOString().slice(0, 10);
+        WHERE id = ?
+      `,
+      [customerId]
+    );
 
-    const note =
-      String(body.note || "").trim();
 
-    const items =
-      Array.isArray(body.items)
-        ? body.items
-        : [];
+  if (!customer) {
 
-    if (!items.length) {
+    return json(
+      {
+        error:
+          "Customer not found"
+      },
+      404
+    );
+  }
 
-      return jsonResponse(
-        {
-          error:
-            "কমপক্ষে একটি stock verification item প্রয়োজন"
-        },
-        400
+
+  const sales =
+    await getAll(
+      db,
+      `
+        SELECT
+          s.id,
+          s.sale_date AS date,
+          'SALE' AS type,
+
+          COALESCE(
+            s.reference,
+            ''
+          ) AS reference,
+
+          COALESCE(
+            s.due_amount,
+            0
+          ) AS debit,
+
+          0 AS credit
+
+        FROM sales s
+
+        WHERE
+          s.customer_id = ?
+
+        ORDER BY
+          s.sale_date ASC,
+          s.id ASC
+      `,
+      [customerId]
+    );
+
+
+  const collections =
+    await getAll(
+      db,
+      `
+        SELECT
+          cc.id,
+          cc.collection_date AS date,
+          'COLLECTION' AS type,
+
+          COALESCE(
+            cc.note,
+            ''
+          ) AS reference,
+
+          0 AS debit,
+
+          COALESCE(
+            cc.amount,
+            0
+          ) AS credit
+
+        FROM customer_collections cc
+
+        WHERE
+          cc.customer_id = ?
+
+        ORDER BY
+          cc.collection_date ASC,
+          cc.id ASC
+      `,
+      [customerId]
+    );
+
+
+  const entries = [
+    ...sales,
+    ...collections
+  ].sort(
+    (a, b) => {
+
+      const dateCompare =
+        String(a.date || "")
+          .localeCompare(
+            String(b.date || "")
+          );
+
+      if (dateCompare !== 0) {
+        return dateCompare;
+      }
+
+      return (
+        Number(a.id) -
+        Number(b.id)
+      );
+    }
+  );
+
+
+  let balance = 0;
+
+
+  for (const entry of entries) {
+
+    balance +=
+      Number(
+        entry.debit || 0
       );
 
+    balance -=
+      Number(
+        entry.credit || 0
+      );
+
+    entry.balance =
+      balance;
+  }
+
+
+  const totalDue =
+    entries.reduce(
+      (sum, entry) =>
+        sum +
+        Number(
+          entry.debit || 0
+        ),
+      0
+    );
+
+
+  const totalCollection =
+    entries.reduce(
+      (sum, entry) =>
+        sum +
+        Number(
+          entry.credit || 0
+        ),
+      0
+    );
+
+
+  return json({
+    success: true,
+    customer,
+    entries,
+    total_due:
+      totalDue,
+    total_collection:
+      totalCollection,
+    current_due:
+      Number(
+        customer.current_due || 0
+      )
+  });
+}
+
+
+/* =========================================================
+   SUPPLIER LEDGER
+========================================================= */
+
+async function supplierLedger(
+  db,
+  supplierId
+) {
+
+  const supplier =
+    await getOne(
+      db,
+      `
+        SELECT
+          id,
+          name,
+          phone,
+          current_due
+
+        FROM suppliers
+
+        WHERE id = ?
+      `,
+      [supplierId]
+    );
+
+
+  if (!supplier) {
+
+    return json(
+      {
+        error:
+          "Supplier not found"
+      },
+      404
+    );
+  }
+
+
+  const purchases =
+    await getAll(
+      db,
+      `
+        SELECT
+          p.id,
+          p.purchase_date AS date,
+          'PURCHASE' AS type,
+
+          COALESCE(
+            p.reference,
+            ''
+          ) AS reference,
+
+          COALESCE(
+            p.due_amount,
+            0
+          ) AS credit,
+
+          0 AS debit
+
+        FROM purchases p
+
+        WHERE
+          p.supplier_id = ?
+
+        ORDER BY
+          p.purchase_date ASC,
+          p.id ASC
+      `,
+      [supplierId]
+    );
+
+
+  const payments =
+    await getAll(
+      db,
+      `
+        SELECT
+          sp.id,
+          sp.payment_date AS date,
+          'PAYMENT' AS type,
+
+          COALESCE(
+            sp.note,
+            ''
+          ) AS reference,
+
+          0 AS credit,
+
+          COALESCE(
+            sp.amount,
+            0
+          ) AS debit
+
+        FROM supplier_payments sp
+
+        WHERE
+          sp.supplier_id = ?
+
+        ORDER BY
+          sp.payment_date ASC,
+          sp.id ASC
+      `,
+      [supplierId]
+    );
+
+
+  const entries = [
+    ...purchases,
+    ...payments
+  ].sort(
+    (a, b) => {
+
+      const dateCompare =
+        String(a.date || "")
+          .localeCompare(
+            String(b.date || "")
+          );
+
+      if (dateCompare !== 0) {
+        return dateCompare;
+      }
+
+      return (
+        Number(a.id) -
+        Number(b.id)
+      );
     }
+  );
 
-    const transactionId =
-      crypto.randomUUID();
 
-    const verificationId =
-      crypto.randomUUID();
+  let balance = 0;
 
-    const createdAt =
-      new Date().toISOString();
 
-    /*
-     * IMPORTANT:
-     *
-     * Verification শুধু snapshot।
-     * এখানে products.current_stock পরিবর্তন করা হবে না।
-     */
+  for (const entry of entries) {
 
-    const productIds =
-      [
-        ...new Set(
-          items
-            .map(item => Number(item.product_id))
-            .filter(id => Number.isInteger(id) && id > 0)
+    balance +=
+      Number(
+        entry.credit || 0
+      );
+
+    balance -=
+      Number(
+        entry.debit || 0
+      );
+
+    entry.balance =
+      balance;
+  }
+
+
+  const totalDue =
+    entries.reduce(
+      (sum, entry) =>
+        sum +
+        Number(
+          entry.credit || 0
+        ),
+      0
+    );
+
+
+  const totalPayment =
+    entries.reduce(
+      (sum, entry) =>
+        sum +
+        Number(
+          entry.debit || 0
+        ),
+      0
+    );
+
+
+  return json({
+    success: true,
+    supplier,
+    entries,
+    total_due:
+      totalDue,
+    total_payment:
+      totalPayment,
+    current_due:
+      Number(
+        supplier.current_due || 0
+      )
+  });
+}
+
+
+/* =========================================================
+   STOCK VERIFICATION SAVE
+========================================================= */
+
+async function saveStockVerification(
+  request,
+  env
+) {
+
+  const body =
+    await readJSON(request);
+
+
+  const verificationDate =
+    body.verification_date ||
+    today();
+
+
+  const note =
+    String(
+      body.note || ""
+    ).trim();
+
+
+  const items =
+    Array.isArray(body.items)
+      ? body.items
+      : [];
+
+
+  if (!items.length) {
+
+    return json(
+      {
+        error:
+          "কমপক্ষে একটি stock verification item প্রয়োজন"
+      },
+      400
+    );
+  }
+
+
+  const verificationId =
+    crypto.randomUUID();
+
+
+  const createdAt =
+    new Date().toISOString();
+
+
+  const productIds = [
+    ...new Set(
+      items
+        .map(
+          item =>
+            Number(
+              item.product_id
+            )
         )
-      ];
+        .filter(
+          id =>
+            Number.isInteger(id) &&
+            id > 0
+        )
+    )
+  ];
 
-    if (!productIds.length) {
 
-      return jsonResponse(
-        {
-          error:
-            "Valid product_id পাওয়া যায়নি"
-        },
-        400
-      );
+  if (!productIds.length) {
 
-    }
+    return json(
+      {
+        error:
+          "Valid product_id পাওয়া যায়নি"
+      },
+      400
+    );
+  }
 
-    const placeholders =
-      productIds.map(() => "?").join(",");
 
-    const productsResult =
-      await env.DB.prepare(`
+  const placeholders =
+    productIds
+      .map(() => "?")
+      .join(",");
+
+
+  const products =
+    await getAll(
+      env.DB,
+      `
         SELECT
           id,
           name,
           current_stock,
           last_purchase_cost
+
         FROM products
-        WHERE id IN (${placeholders})
-      `)
-      .bind(...productIds)
-      .all();
 
-    const productsById =
-      new Map(
-        (productsResult.results || [])
-          .map(product => [
-            Number(product.id),
-            product
-          ])
-      );
+        WHERE id IN
+          (${placeholders})
+      `,
+      productIds
+    );
 
-    const statements = [];
 
-    statements.push(
-      env.DB.prepare(`
-        INSERT INTO stock_verifications (
-          id,
-          verification_date,
-          note,
-          created_at
-        )
-        VALUES (?, ?, ?, ?)
-      `).bind(
-        verificationId,
-        verificationDate,
-        note,
-        createdAt
+  const productsById =
+    new Map(
+      products.map(
+        product => [
+          Number(product.id),
+          product
+        ]
       )
     );
 
-    for (const item of items) {
 
-      const productId =
-        Number(item.product_id);
+  const statements = [];
 
-      const physicalQty =
-        Number(item.physical_qty);
 
-      const product =
-        productsById.get(productId);
+  statements.push(
+    env.DB.prepare(`
+      INSERT INTO stock_verifications (
+        id,
+        verification_date,
+        note,
+        created_at
+      )
+      VALUES (?, ?, ?, ?)
+    `).bind(
+      verificationId,
+      verificationDate,
+      note,
+      createdAt
+    )
+  );
 
-      if (!product) {
 
-        return jsonResponse(
-          {
-            error:
-              `Product not found: ${productId}`
-          },
-          400
-        );
+  for (const item of items) {
 
-      }
+    const productId =
+      Number(
+        item.product_id
+      );
 
-      if (
-        !Number.isFinite(physicalQty) ||
-        physicalQty < 0
-      ) {
 
-        return jsonResponse(
-          {
-            error:
-              `Invalid physical quantity for product ${productId}`
-          },
-          400
-        );
+    const physicalQty =
+      Number(
+        item.physical_qty
+      );
 
-      }
 
-      const systemQty =
-        Number(product.current_stock || 0);
+    const product =
+      productsById.get(
+        productId
+      );
 
-      const unitCost =
-        Number(product.last_purchase_cost || 0);
 
-      const expectedValue =
-        systemQty * unitCost;
+    if (!product) {
 
-      const physicalValue =
-        physicalQty * unitCost;
+      return json(
+        {
+          error:
+            `Product not found: ${productId}`
+        },
+        400
+      );
+    }
 
-      const differenceQty =
-        physicalQty - systemQty;
 
-      const differenceValue =
-        physicalValue - expectedValue;
+    if (
+      !Number.isFinite(
+        physicalQty
+      ) ||
+      physicalQty < 0
+    ) {
 
-      statements.push(
-        env.DB.prepare(`
-          INSERT INTO stock_verification_items (
+      return json(
+        {
+          error:
+            `Invalid physical quantity for product ${productId}`
+        },
+        400
+      );
+    }
+
+
+    const systemQty =
+      Number(
+        product.current_stock || 0
+      );
+
+
+    const unitCost =
+      Number(
+        product.last_purchase_cost ||
+        0
+      );
+
+
+    const expectedValue =
+      systemQty *
+      unitCost;
+
+
+    const physicalValue =
+      physicalQty *
+      unitCost;
+
+
+    const differenceQty =
+      physicalQty -
+      systemQty;
+
+
+    const differenceValue =
+      physicalValue -
+      expectedValue;
+
+
+    statements.push(
+      env.DB.prepare(`
+        INSERT INTO
+          stock_verification_items (
             id,
             verification_id,
             product_id,
@@ -1031,587 +1752,44 @@ if (
             difference_qty,
             difference_value
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          crypto.randomUUID(),
-          verificationId,
-          productId,
-          systemQty,
-          unitCost,
-          expectedValue,
-          physicalQty,
-          physicalValue,
-          differenceQty,
-          differenceValue
+
+        VALUES (
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?
         )
-      );
-
-    }
-
-    /*
-     * D1 batch:
-     * Verification header + all items
-     * একসাথে commit হবে।
-     */
-    await env.DB.batch(statements);
-
-    return jsonResponse(
-      {
-        success: true,
-        verification_id:
-          verificationId,
-        items_saved:
-          items.length
-      },
-      201
+      `).bind(
+        crypto.randomUUID(),
+        verificationId,
+        productId,
+        systemQty,
+        unitCost,
+        expectedValue,
+        physicalQty,
+        physicalValue,
+        differenceQty,
+        differenceValue
+      )
     );
-
-  } catch (error) {
-
-    console.error(
-      "Stock verification error:",
-      error
-    );
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Stock verification failed"
-      },
-      500
-    );
-
-  }
-}
-
-
-// ============================================================
-// SUPPLIER LEDGER
-// ============================================================
-
-if (
-  pathname.match(
-    /^\/api\/suppliers\/\d+\/ledger$/
-  ) &&
-  request.method === "GET"
-) {
-
-  const supplierId =
-    Number(
-      pathname.split("/")[3]
-    );
-
-
-  if (!supplierId) {
-
-    return jsonResponse(
-      {
-        error:
-          "Invalid supplier ID"
-      },
-      400,
-      corsHeaders
-    );
-
   }
 
 
-  try {
-
-    const supplier =
-      await env.DB
-        .prepare(`
-          SELECT
-            id,
-            name,
-            phone,
-            current_due
-          FROM suppliers
-          WHERE id = ?
-        `)
-        .bind(supplierId)
-        .first();
+  await env.DB.batch(
+    statements
+  );
 
 
-    if (!supplier) {
-
-      return jsonResponse(
-        {
-          error:
-            "Supplier not found"
-        },
-        404,
-        corsHeaders
-      );
-
-    }
-
-
-    const purchases =
-      await env.DB
-        .prepare(`
-          SELECT
-            p.id,
-            p.purchase_date AS date,
-            'PURCHASE' AS type,
-            COALESCE(
-              p.reference,
-              ''
-            ) AS reference,
-            COALESCE(
-              p.total_amount,
-              0
-            ) AS credit,
-            0 AS debit
-          FROM purchases p
-          WHERE p.supplier_id = ?
-
-          ORDER BY
-            p.purchase_date ASC,
-            p.id ASC
-        `)
-        .bind(supplierId)
-        .all();
-
-
-    const payments =
-      await env.DB
-        .prepare(`
-          SELECT
-            sp.id,
-            sp.payment_date AS date,
-            'PAYMENT' AS type,
-            COALESCE(
-              sp.note,
-              ''
-            ) AS reference,
-            0 AS credit,
-            COALESCE(
-              sp.amount,
-              0
-            ) AS debit
-          FROM supplier_payments sp
-          WHERE sp.supplier_id = ?
-
-          ORDER BY
-            sp.payment_date ASC,
-            sp.id ASC
-        `)
-        .bind(supplierId)
-        .all();
-
-
-    const entries = [
-      ...(purchases.results || []),
-      ...(payments.results || [])
-    ]
-      .sort((a, b) => {
-
-        const dateCompare =
-          String(a.date || "")
-            .localeCompare(
-              String(b.date || "")
-            );
-
-
-        if (dateCompare !== 0) {
-          return dateCompare;
-        }
-
-
-        return Number(a.id) -
-          Number(b.id);
-
-      });
-
-
-    let balance = 0;
-
-
-    for (const entry of entries) {
-
-      balance +=
-        Number(entry.credit || 0);
-
-      balance -=
-        Number(entry.debit || 0);
-
-      entry.balance =
-        balance;
-
-    }
-
-
-    const totalDue =
-      entries.reduce(
-        (sum, entry) =>
-          sum +
-          Number(
-            entry.credit || 0
-          ),
-        0
-      );
-
-
-    const totalPayment =
-      entries.reduce(
-        (sum, entry) =>
-          sum +
-          Number(
-            entry.debit || 0
-          ),
-        0
-      );
-
-
-    return jsonResponse(
-      {
-        supplier,
-        entries,
-        total_due:
-          totalDue,
-        total_payment:
-          totalPayment,
-        current_due:
-          Number(
-            supplier.current_due || 0
-          )
-      },
-      200,
-      corsHeaders
-    );
-
-
-  } catch (error) {
-
-    console.error(
-      "Supplier ledger error:",
-      error
-    );
-
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Supplier ledger failed"
-      },
-      500,
-      corsHeaders
-    );
-
-  }
-}
-
-// ============================================================
-// STEP 13 — SETTINGS API
-// ============================================================
-
-if (
-  request.method === "GET" &&
-  pathname === "/api/settings"
-) {
-
-  try {
-
-    const settings =
-      await getSettings(env.DB);
-
-    return jsonResponse({
+  return json(
+    {
       success: true,
-      settings
-    });
-
-  } catch (error) {
-
-    console.error(
-      "Settings GET error:",
-      error
-    );
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Failed to load settings"
-      },
-      500
-    );
-  }
+      verification_id:
+        verificationId,
+      items_saved:
+        items.length
+    },
+    201
+  );
 }
 
-
-if (
-  request.method === "PUT" &&
-  pathname.startsWith("/api/settings/")
-) {
-
-  try {
-
-    const key =
-      decodeURIComponent(
-        pathname.replace(
-          "/api/settings/",
-          ""
-        )
-      );
-
-    const body =
-      await request.json();
-
-    const setting =
-      await saveSetting(
-        env.DB,
-        key,
-        body.value
-      );
-
-
-    await writeAuditLog(
-      env.DB,
-      {
-        action: "SETTING_UPDATE",
-        entityType: "setting",
-        entityId: key,
-        details: {
-          value_changed: true
-        }
-      }
-    );
-
-
-    return jsonResponse({
-      success: true,
-      setting
-    });
-
-  } catch (error) {
-
-    console.error(
-      "Settings PUT error:",
-      error
-    );
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Failed to save setting"
-      },
-      400
-    );
-  }
-}
-
-
-// ============================================================
-// AUDIT LOG API
-// ============================================================
-
-if (
-  request.method === "GET" &&
-  pathname === "/api/audit-log"
-) {
-
-  try {
-
-    const url =
-      new URL(request.url);
-
-    const limit =
-      url.searchParams.get("limit") || 100;
-
-    const offset =
-      url.searchParams.get("offset") || 0;
-
-
-    const logs =
-      await getAuditLogs(
-        env.DB,
-        {
-          limit,
-          offset
-        }
-      );
-
-
-    return jsonResponse({
-      success: true,
-      logs
-    });
-
-  } catch (error) {
-
-    console.error(
-      "Audit log error:",
-      error
-    );
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Failed to load audit log"
-      },
-      500
-    );
-  }
-}
-
-
-// ============================================================
-// BACKUP API
-// ============================================================
-
-if (
-  request.method === "GET" &&
-  pathname === "/api/backup"
-) {
-
-  try {
-
-    const backup =
-      await createBackup(
-        env.DB
-      );
-
-
-    await writeAuditLog(
-      env.DB,
-      {
-        action: "BACKUP_CREATED",
-        entityType: "system",
-        details: {
-          format_version:
-            backup.format_version
-        }
-      }
-    );
-
-
-    return jsonResponse(
-      backup,
-      200,
-      {
-        "Content-Disposition":
-          `attachment; filename="chamak-store-backup-${Date.now()}.json"`
-      }
-    );
-
-  } catch (error) {
-
-    console.error(
-      "Backup error:",
-      error
-    );
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Backup failed"
-      },
-      500
-    );
-  }
-}
-
-
-// ============================================================
-// RESTORE API
-// ============================================================
-
-if (
-  request.method === "POST" &&
-  pathname === "/api/restore"
-) {
-
-  try {
-
-    const body =
-      await request.json();
-
-
-    /*
-     * Extra protection.
-     *
-     * Client must explicitly send:
-     *
-     * confirm_restore = "RESTORE CHAMAK STORE"
-     */
-
-    if (
-      body.confirm_restore !==
-      "RESTORE CHAMAK STORE"
-    ) {
-
-      return jsonResponse(
-        {
-          error:
-            "Restore confirmation required"
-        },
-        400
-      );
-    }
-
-
-    if (!body.backup) {
-
-      return jsonResponse(
-        {
-          error:
-            "Backup data is required"
-        },
-        400
-      );
-    }
-
-
-    const result =
-      await restoreBackup(
-        env.DB,
-        body.backup
-      );
-
-
-    await writeAuditLog(
-      env.DB,
-      {
-        action: "BACKUP_RESTORED",
-        entityType: "system",
-        details: {
-          format_version:
-            body.backup.format_version
-        }
-      }
-    );
-
-
-    return jsonResponse({
-      success: true,
-      message:
-        "Backup restored successfully",
-      ...result
-    });
-
-  } catch (error) {
-
-    console.error(
-      "Restore error:",
-      error
-    );
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Restore failed"
-      },
-      400
-    );
-  }
-}
 
 /* =========================================================
    TRANSACTION ROUTER
@@ -1622,20 +1800,31 @@ async function transactionRoute(
   env,
   type
 ) {
-  const body = await readJSON(request);
 
-  const db = env.DB;
+  const body =
+    await readJSON(request);
+
+
+  const db =
+    env.DB;
+
 
   const idempotencyKey =
-    getIdempotencyKey(request, body);
+    getIdempotencyKey(
+      request,
+      body
+    );
+
 
   const common = {
+
     transactionDate:
       body.transaction_date ||
-      new Date().toISOString().slice(0, 10),
+      today(),
 
     note:
-      body.note || null,
+      body.note ||
+      null,
 
     idempotencyKey
   };
@@ -1643,192 +1832,255 @@ async function transactionRoute(
 
   switch (type) {
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        PURCHASE
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     case "purchase":
 
       return json(
-        await createPurchase(db, {
-          supplierId:
-            body.supplier_id || null,
+        await createPurchase(
+          db,
+          {
+            supplierId:
+              body.supplier_id ||
+              null,
 
-          items:
-            body.items,
+            items:
+              body.items,
 
-          paymentAccountId:
-            body.payment_account_id ||
-            ACCOUNT.CASH,
+            paymentAccountId:
+              body.payment_account_id ||
+              ACCOUNT.CASH,
 
-          paidAmount:
-            body.paid_amount || 0,
+            paidAmount:
+              body.paid_amount ||
+              0,
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
-    /* ---------------------------------------------
-       SALE
-    --------------------------------------------- */
+    /* -----------------------------------------------------
+       PRODUCT SALE
+    ----------------------------------------------------- */
 
     case "sale":
 
       return json(
-        await createSale(db, {
-          customerId:
-            body.customer_id || null,
+        await createSale(
+          db,
+          {
+            customerId:
+              body.customer_id ||
+              null,
 
-          items:
-            body.items,
+            items:
+              body.items,
 
-          paymentAccountId:
-            body.payment_account_id ||
-            ACCOUNT.CASH,
+            paymentAccountId:
+              body.payment_account_id ||
+              ACCOUNT.CASH,
 
-          paidAmount:
-            body.paid_amount || 0,
+            paidAmount:
+              body.paid_amount ||
+              0,
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
+       DIRECT TOTAL SALE
+       
+       IMPORTANT:
+       এখানে STOCK পরিবর্তন হবে না।
+    ----------------------------------------------------- */
+
+    case "direct-sale":
+
+      return json(
+        await createDirectSale(
+          db,
+          {
+            customerId:
+              body.customer_id ||
+              null,
+
+            totalAmount:
+              body.total_amount,
+
+            paidAmount:
+              body.paid_amount ||
+              0,
+
+            paymentAccountId:
+              body.payment_account_id ||
+              ACCOUNT.CASH,
+
+            ...common
+          }
+        )
+      );
+
+
+    /* -----------------------------------------------------
        CUSTOMER COLLECTION
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     case "customer-collection":
 
       return json(
-        await createCustomerCollection(db, {
-          customerId:
-            body.customer_id,
+        await createCustomerCollection(
+          db,
+          {
+            customerId:
+              body.customer_id,
 
-          amount:
-            body.amount,
+            amount:
+              body.amount,
 
-          accountId:
-            body.account_id ||
-            ACCOUNT.CASH,
+            accountId:
+              body.account_id ||
+              ACCOUNT.CASH,
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        SUPPLIER PAYMENT
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     case "supplier-payment":
 
       return json(
-        await createSupplierPayment(db, {
-          supplierId:
-            body.supplier_id,
+        await createSupplierPayment(
+          db,
+          {
+            supplierId:
+              body.supplier_id,
 
-          amount:
-            body.amount,
+            amount:
+              body.amount,
 
-          accountId:
-            body.account_id ||
-            ACCOUNT.CASH,
+            accountId:
+              body.account_id ||
+              ACCOUNT.CASH,
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        EXPENSE
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     case "expense":
 
       return json(
-        await createExpense(db, {
-          amount:
-            body.amount,
+        await createExpense(
+          db,
+          {
+            amount:
+              body.amount,
 
-          accountId:
-            body.account_id ||
-            ACCOUNT.CASH,
+            accountId:
+              body.account_id ||
+              ACCOUNT.CASH,
 
-          expenseType:
-            body.expense_type ||
-            "SHOP",
+            expenseType:
+              body.expense_type ||
+              "SHOP",
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        OTHER INCOME
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     case "other-income":
 
       return json(
-        await createOtherIncome(db, {
-          amount:
-            body.amount,
+        await createOtherIncome(
+          db,
+          {
+            amount:
+              body.amount,
 
-          accountId:
-            body.account_id ||
-            ACCOUNT.CASH,
+            accountId:
+              body.account_id ||
+              ACCOUNT.CASH,
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        STOCK ADJUSTMENT
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     case "stock-adjustment":
 
       return json(
-        await createStockAdjustment(db, {
-          productId:
-            body.product_id,
+        await createStockAdjustment(
+          db,
+          {
+            productId:
+              body.product_id,
 
-          newQuantity:
-            body.new_quantity,
+            newQuantity:
+              body.new_quantity,
 
-          unitCost:
-            body.unit_cost ?? null,
+            unitCost:
+              body.unit_cost ??
+              null,
 
-          reason:
-            body.reason,
+            reason:
+              body.reason,
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        ACCOUNT TRANSFER
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     case "account-transfer":
 
       return json(
-        await createAccountTransfer(db, {
-          fromAccountId:
-            body.from_account_id,
+        await createAccountTransfer(
+          db,
+          {
+            fromAccountId:
+              body.from_account_id,
 
-          toAccountId:
-            body.to_account_id,
+            toAccountId:
+              body.to_account_id,
 
-          amount:
-            body.amount,
+            amount:
+              body.amount,
 
-          ...common
-        })
+            ...common
+          }
+        )
       );
 
 
@@ -1847,30 +2099,41 @@ async function transactionRoute(
 
 export default {
 
-  async fetch(request, env) {
+  async fetch(
+    request,
+    env
+  ) {
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        CORS PREFLIGHT
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
-    if (request.method === "OPTIONS") {
+    if (
+      request.method ===
+      "OPTIONS"
+    ) {
       return corsResponse();
     }
 
 
     const url =
-      new URL(request.url);
+      new URL(
+        request.url
+      );
+
 
     const path =
-      url.pathname.replace(/\/+$/, "") ||
-      "/";
+      url.pathname.replace(
+        /\/+$/,
+        ""
+      ) || "/";
 
 
     try {
 
-      /* ---------------------------------------------
+      /* ===================================================
          HEALTH
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "GET" &&
@@ -1883,22 +2146,28 @@ export default {
             `SELECT 1 AS ok`
           );
 
+
         return json({
           success: true,
           status: "ok",
+
           database:
             result?.ok === 1
               ? "connected"
               : "unknown",
-          service: "chamak-store",
-          version: "1.0.0"
+
+          service:
+            "chamak-store",
+
+          version:
+            "1.0.0"
         });
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
          DASHBOARD
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "GET" &&
@@ -1906,14 +2175,17 @@ export default {
       ) {
 
         return json(
-          await dashboard(env.DB)
+          await dashboard(
+            env.DB,
+            url
+          )
         );
       }
 
 
-      /* ---------------------------------------------
-         PRODUCTS
-      --------------------------------------------- */
+      /* ===================================================
+         PRODUCTS LIST
+      =================================================== */
 
       if (
         request.method === "GET" &&
@@ -1926,513 +2198,130 @@ export default {
         );
       }
 
-      /* =========================================================
-   PRODUCT CREATE
-========================================================= */
 
-if (
-  request.method === "POST" &&
-  path === "/api/products"
-) {
+      /* ===================================================
+         PRODUCT CREATE
+      =================================================== */
 
-  const body =
-    await readJSON(request);
+      if (
+        request.method === "POST" &&
+        path === "/api/products"
+      ) {
 
-  return json(
-    await createProduct(
-      env.DB,
-      {
-        sku: body.sku,
-        name: body.name,
-        unit: body.unit,
-        purchasePrice:
-          body.purchase_price ?? 0,
-        salePrice:
-          body.sale_price ?? 0,
-        lowStockLevel:
-          body.low_stock_level ?? 0
-      }
-    )
-  );
-}
+        const body =
+          await readJSON(request);
 
 
-/* =========================================================
-   PRODUCT GET ONE
-========================================================= */
+        return json(
+          await createProduct(
+            env.DB,
+            {
+              sku:
+                body.sku,
 
-if (
-  request.method === "GET" &&
-  /^\/api\/products\/[^/]+$/.test(path)
-) {
+              name:
+                body.name,
 
-  const id =
-    path.split("/").pop();
+              unit:
+                body.unit,
 
-  return json({
-    success: true,
-    product:
-      await getProduct(
-        env.DB,
-        id
-      )
-  });
-}
+              purchasePrice:
+                body.purchase_price ??
+                0,
 
+              salePrice:
+                body.sale_price ??
+                0,
 
-/* =========================================================
-   PRODUCT UPDATE
-========================================================= */
-
-if (
-  request.method === "PUT" &&
-  /^\/api\/products\/[^/]+$/.test(path)
-) {
-
-  const id =
-    path.split("/").pop();
-
-  const body =
-    await readJSON(request);
-
-  return json(
-    await updateProduct(
-      env.DB,
-      id,
-      body
-    )
-  );
-}
-
-
-/* =========================================================
-   PRODUCT DELETE
-========================================================= */
-
-if (
-  request.method === "DELETE" &&
-  /^\/api\/products\/[^/]+$/.test(path)
-) {
-
-  const id =
-    path.split("/").pop();
-
-  return json(
-    await deleteProduct(
-      env.DB,
-      id
-    )
-  );
-}
-
-
-/* =========================================================
-   CUSTOMER CREATE
-========================================================= */
-
-if (
-  request.method === "POST" &&
-  path === "/api/customers"
-) {
-
-  const body =
-    await readJSON(request);
-
-  return json(
-    await createCustomer(
-      env.DB,
-      {
-        name: body.name,
-        phone: body.phone,
-        address: body.address
-      }
-    )
-  );
-}
-
-
-/* =========================================================
-   CUSTOMER GET ONE
-========================================================= */
-
-if (
-  request.method === "GET" &&
-  /^\/api\/customers\/[^/]+$/.test(path)
-) {
-
-  const id =
-    path.split("/").pop();
-
-  return json({
-    success: true,
-    customer:
-      await getCustomer(
-        env.DB,
-        id
-      )
-  });
-}
-
-
-/* =========================================================
-   CUSTOMER UPDATE
-========================================================= */
-
-if (
-  request.method === "PUT" &&
-  /^\/api\/customers\/[^/]+$/.test(path)
-) {
-
-  const id =
-    path.split("/").pop();
-
-  const body =
-    await readJSON(request);
-
-  return json(
-    await updateCustomer(
-      env.DB,
-      id,
-      body
-    )
-  );
-}
-
-
-/* =========================================================
-   CUSTOMER DELETE
-========================================================= */
-
-if (
-  request.method === "DELETE" &&
-  /^\/api\/customers\/[^/]+$/.test(path)
-) {
-
-  const id =
-    path.split("/").pop();
-
-  return json(
-    await deleteCustomer(
-      env.DB,
-      id
-    )
-  );
-}
-// ============================================================
-// CUSTOMER LEDGER
-// ============================================================
-
-if (
-  pathname.match(
-    /^\/api\/customers\/\d+\/ledger$/
-  ) &&
-  request.method === "GET"
-) {
-
-  const customerId =
-    Number(
-      pathname.split("/")[3]
-    );
-
-
-  if (!customerId) {
-
-    return jsonResponse(
-      {
-        error:
-          "Invalid customer ID"
-      },
-      400,
-      corsHeaders
-    );
-
-  }
-
-
-  try {
-
-    const customer =
-      await env.DB
-        .prepare(`
-          SELECT
-            id,
-            name,
-            phone,
-            current_due
-          FROM customers
-          WHERE id = ?
-        `)
-        .bind(customerId)
-        .first();
-
-
-    if (!customer) {
-
-      return jsonResponse(
-        {
-          error:
-            "Customer not found"
-        },
-        404,
-        corsHeaders
-      );
-
-    }
-
-
-    const sales =
-      await env.DB
-        .prepare(`
-          SELECT
-            s.id,
-            s.sale_date AS date,
-            'SALE' AS type,
-            COALESCE(
-              s.reference,
-              ''
-            ) AS reference,
-            COALESCE(
-              s.total_amount,
-              0
-            ) AS debit,
-            0 AS credit
-          FROM sales s
-          WHERE s.customer_id = ?
-
-          ORDER BY
-            s.sale_date ASC,
-            s.id ASC
-        `)
-        .bind(customerId)
-        .all();
-
-
-    const collections =
-      await env.DB
-        .prepare(`
-          SELECT
-            cc.id,
-            cc.collection_date AS date,
-            'COLLECTION' AS type,
-            COALESCE(
-              cc.note,
-              ''
-            ) AS reference,
-            0 AS debit,
-            COALESCE(
-              cc.amount,
-              0
-            ) AS credit
-          FROM customer_collections cc
-          WHERE cc.customer_id = ?
-
-          ORDER BY
-            cc.collection_date ASC,
-            cc.id ASC
-        `)
-        .bind(customerId)
-        .all();
-
-
-    const entries = [
-      ...(sales.results || []),
-      ...(collections.results || [])
-    ]
-      .sort((a, b) => {
-
-        const dateCompare =
-          String(a.date || "")
-            .localeCompare(
-              String(b.date || "")
-            );
-
-        if (dateCompare !== 0) {
-          return dateCompare;
-        }
-
-        return Number(a.id) -
-          Number(b.id);
-
-      });
-
-
-    let balance = 0;
-
-
-    for (const entry of entries) {
-
-      balance +=
-        Number(entry.debit || 0);
-
-      balance -=
-        Number(entry.credit || 0);
-
-      entry.balance =
-        balance;
-
-    }
-
-
-    const totalDue =
-      entries.reduce(
-        (sum, entry) =>
-          sum +
-          Number(
-            entry.debit || 0
-          ),
-        0
-      );
-
-
-    const totalCollection =
-      entries.reduce(
-        (sum, entry) =>
-          sum +
-          Number(
-            entry.credit || 0
-          ),
-        0
-      );
-
-
-    return jsonResponse(
-      {
-        customer,
-        entries,
-        total_due: totalDue,
-        total_collection:
-          totalCollection,
-        current_due:
-          Number(
-            customer.current_due || 0
+              lowStockLevel:
+                body.low_stock_level ??
+                0
+            }
           )
-      },
-      200,
-      corsHeaders
-    );
-
-
-  } catch (error) {
-
-    console.error(
-      "Customer ledger error:",
-      error
-    );
-
-
-    return jsonResponse(
-      {
-        error:
-          error.message ||
-          "Customer ledger failed"
-      },
-      500,
-      corsHeaders
-    );
-
-  }
-}      
-
-
-/* =========================================================
-   SUPPLIER CREATE
-========================================================= */
-
-if (
-  request.method === "POST" &&
-  path === "/api/suppliers"
-) {
-
-  const body =
-    await readJSON(request);
-
-  return json(
-    await createSupplier(
-      env.DB,
-      {
-        name: body.name,
-        phone: body.phone,
-        address: body.address
+        );
       }
-    )
-  );
-}
 
 
-/* =========================================================
-   SUPPLIER GET ONE
-========================================================= */
+      /* ===================================================
+         PRODUCT GET
+      =================================================== */
 
-if (
-  request.method === "GET" &&
-  /^\/api\/suppliers\/[^/]+$/.test(path)
-) {
+      if (
+        request.method === "GET" &&
+        /^\/api\/products\/[^/]+$/
+          .test(path)
+      ) {
 
-  const id =
-    path.split("/").pop();
-
-  return json({
-    success: true,
-    supplier:
-      await getSupplier(
-        env.DB,
-        id
-      )
-  });
-}
+        const id =
+          path.split("/").pop();
 
 
-/* =========================================================
-   SUPPLIER UPDATE
-========================================================= */
+        return json({
+          success: true,
 
-if (
-  request.method === "PUT" &&
-  /^\/api\/suppliers\/[^/]+$/.test(path)
-) {
-
-  const id =
-    path.split("/").pop();
-
-  const body =
-    await readJSON(request);
-
-  return json(
-    await updateSupplier(
-      env.DB,
-      id,
-      body
-    )
-  );
-}
+          product:
+            await getProduct(
+              env.DB,
+              id
+            )
+        });
+      }
 
 
-/* =========================================================
-   SUPPLIER DELETE
-========================================================= */
+      /* ===================================================
+         PRODUCT UPDATE
+      =================================================== */
 
-if (
-  request.method === "DELETE" &&
-  /^\/api\/suppliers\/[^/]+$/.test(path)
-) {
+      if (
+        request.method === "PUT" &&
+        /^\/api\/products\/[^/]+$/
+          .test(path)
+      ) {
 
-  const id =
-    path.split("/").pop();
-
-  return json(
-    await deleteSupplier(
-      env.DB,
-      id
-    )
-  );
-}
-
-      
+        const id =
+          path.split("/").pop();
 
 
-      /* ---------------------------------------------
-         CUSTOMERS
-      --------------------------------------------- */
+        const body =
+          await readJSON(request);
+
+
+        return json(
+          await updateProduct(
+            env.DB,
+            id,
+            body
+          )
+        );
+      }
+
+
+      /* ===================================================
+         PRODUCT DELETE
+      =================================================== */
+
+      if (
+        request.method === "DELETE" &&
+        /^\/api\/products\/[^/]+$/
+          .test(path)
+      ) {
+
+        const id =
+          path.split("/").pop();
+
+
+        return json(
+          await deleteProduct(
+            env.DB,
+            id
+          )
+        );
+      }
+
+
+      /* ===================================================
+         CUSTOMER LIST
+      =================================================== */
 
       if (
         request.method === "GET" &&
@@ -2446,9 +2335,152 @@ if (
       }
 
 
-      /* ---------------------------------------------
-         SUPPLIERS
-      --------------------------------------------- */
+      /* ===================================================
+         CUSTOMER CREATE
+      =================================================== */
+
+      if (
+        request.method === "POST" &&
+        path === "/api/customers"
+      ) {
+
+        const body =
+          await readJSON(request);
+
+
+        return json(
+          await createCustomer(
+            env.DB,
+            {
+              name:
+                body.name,
+
+              phone:
+                body.phone,
+
+              address:
+                body.address
+            }
+          )
+        );
+      }
+
+
+      /* ===================================================
+         CUSTOMER LEDGER
+      =================================================== */
+
+      if (
+        request.method === "GET" &&
+        /^\/api\/customers\/\d+\/ledger$/
+          .test(path)
+      ) {
+
+        const customerId =
+          Number(
+            path.split("/")[3]
+          );
+
+
+        if (!customerId) {
+
+          return json(
+            {
+              error:
+                "Invalid customer ID"
+            },
+            400
+          );
+        }
+
+
+        return await customerLedger(
+          env.DB,
+          customerId
+        );
+      }
+
+
+      /* ===================================================
+         CUSTOMER GET ONE
+      =================================================== */
+
+      if (
+        request.method === "GET" &&
+        /^\/api\/customers\/[^/]+$/
+          .test(path)
+      ) {
+
+        const id =
+          path.split("/").pop();
+
+
+        return json({
+          success: true,
+
+          customer:
+            await getCustomer(
+              env.DB,
+              id
+            )
+        });
+      }
+
+
+      /* ===================================================
+         CUSTOMER UPDATE
+      =================================================== */
+
+      if (
+        request.method === "PUT" &&
+        /^\/api\/customers\/[^/]+$/
+          .test(path)
+      ) {
+
+        const id =
+          path.split("/").pop();
+
+
+        const body =
+          await readJSON(request);
+
+
+        return json(
+          await updateCustomer(
+            env.DB,
+            id,
+            body
+          )
+        );
+      }
+
+
+      /* ===================================================
+         CUSTOMER DELETE
+      =================================================== */
+
+      if (
+        request.method === "DELETE" &&
+        /^\/api\/customers\/[^/]+$/
+          .test(path)
+      ) {
+
+        const id =
+          path.split("/").pop();
+
+
+        return json(
+          await deleteCustomer(
+            env.DB,
+            id
+          )
+        );
+      }
+
+
+      /* ===================================================
+         SUPPLIER LIST
+      =================================================== */
 
       if (
         request.method === "GET" &&
@@ -2462,9 +2494,152 @@ if (
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
+         SUPPLIER CREATE
+      =================================================== */
+
+      if (
+        request.method === "POST" &&
+        path === "/api/suppliers"
+      ) {
+
+        const body =
+          await readJSON(request);
+
+
+        return json(
+          await createSupplier(
+            env.DB,
+            {
+              name:
+                body.name,
+
+              phone:
+                body.phone,
+
+              address:
+                body.address
+            }
+          )
+        );
+      }
+
+
+      /* ===================================================
+         SUPPLIER LEDGER
+      =================================================== */
+
+      if (
+        request.method === "GET" &&
+        /^\/api\/suppliers\/\d+\/ledger$/
+          .test(path)
+      ) {
+
+        const supplierId =
+          Number(
+            path.split("/")[3]
+          );
+
+
+        if (!supplierId) {
+
+          return json(
+            {
+              error:
+                "Invalid supplier ID"
+            },
+            400
+          );
+        }
+
+
+        return await supplierLedger(
+          env.DB,
+          supplierId
+        );
+      }
+
+
+      /* ===================================================
+         SUPPLIER GET ONE
+      =================================================== */
+
+      if (
+        request.method === "GET" &&
+        /^\/api\/suppliers\/[^/]+$/
+          .test(path)
+      ) {
+
+        const id =
+          path.split("/").pop();
+
+
+        return json({
+          success: true,
+
+          supplier:
+            await getSupplier(
+              env.DB,
+              id
+            )
+        });
+      }
+
+
+      /* ===================================================
+         SUPPLIER UPDATE
+      =================================================== */
+
+      if (
+        request.method === "PUT" &&
+        /^\/api\/suppliers\/[^/]+$/
+          .test(path)
+      ) {
+
+        const id =
+          path.split("/").pop();
+
+
+        const body =
+          await readJSON(request);
+
+
+        return json(
+          await updateSupplier(
+            env.DB,
+            id,
+            body
+          )
+        );
+      }
+
+
+      /* ===================================================
+         SUPPLIER DELETE
+      =================================================== */
+
+      if (
+        request.method === "DELETE" &&
+        /^\/api\/suppliers\/[^/]+$/
+          .test(path)
+      ) {
+
+        const id =
+          path.split("/").pop();
+
+
+        return json(
+          await deleteSupplier(
+            env.DB,
+            id
+          )
+        );
+      }
+
+
+      /* ===================================================
          ACCOUNTS
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "GET" &&
@@ -2477,13 +2652,14 @@ if (
       }
 
 
-      /* ---------------------------------------------
-         STOCK VERIFICATION
-      --------------------------------------------- */
+      /* ===================================================
+         STOCK VERIFICATION LIST
+      =================================================== */
 
       if (
         request.method === "GET" &&
-        path === "/api/stock-verification"
+        path ===
+          "/api/stock-verification"
       ) {
 
         return await stockVerification(
@@ -2493,13 +2669,31 @@ if (
       }
 
 
-      /* ---------------------------------------------
-         PURCHASE
-      --------------------------------------------- */
+      /* ===================================================
+         STOCK VERIFICATION SAVE
+      =================================================== */
 
       if (
         request.method === "POST" &&
-        path === "/api/transactions/purchase"
+        path ===
+          "/api/stock-verification"
+      ) {
+
+        return await saveStockVerification(
+          request,
+          env
+        );
+      }
+
+
+      /* ===================================================
+         PURCHASE
+      =================================================== */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/purchase"
       ) {
 
         return await transactionRoute(
@@ -2510,13 +2704,14 @@ if (
       }
 
 
-      /* ---------------------------------------------
-         SALE
-      --------------------------------------------- */
+      /* ===================================================
+         PRODUCT SALE
+      =================================================== */
 
       if (
         request.method === "POST" &&
-        path === "/api/transactions/sale"
+        path ===
+          "/api/transactions/sale"
       ) {
 
         return await transactionRoute(
@@ -2527,9 +2722,30 @@ if (
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
+         DIRECT TOTAL SALE
+         
+         IMPORTANT:
+         Product stock is NOT changed.
+      =================================================== */
+
+      if (
+        request.method === "POST" &&
+        path ===
+          "/api/transactions/direct-sale"
+      ) {
+
+        return await transactionRoute(
+          request,
+          env,
+          "direct-sale"
+        );
+      }
+
+
+      /* ===================================================
          CUSTOMER COLLECTION
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "POST" &&
@@ -2545,9 +2761,9 @@ if (
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
          SUPPLIER PAYMENT
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "POST" &&
@@ -2563,9 +2779,9 @@ if (
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
          EXPENSE
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "POST" &&
@@ -2581,9 +2797,9 @@ if (
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
          OTHER INCOME
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "POST" &&
@@ -2599,9 +2815,9 @@ if (
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
          STOCK ADJUSTMENT
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "POST" &&
@@ -2617,9 +2833,9 @@ if (
       }
 
 
-      /* ---------------------------------------------
+      /* ===================================================
          ACCOUNT TRANSFER
-      --------------------------------------------- */
+      =================================================== */
 
       if (
         request.method === "POST" &&
@@ -2635,16 +2851,333 @@ if (
       }
 
 
-      /* ---------------------------------------------
-         API 404
-      --------------------------------------------- */
+      /* ===================================================
+         SETTINGS
+      =================================================== */
 
-      if (path.startsWith("/api/")) {
+      if (
+        request.method === "GET" &&
+        path === "/api/settings"
+      ) {
+
+        const settings =
+          await getSettings(
+            env.DB
+          );
+
+
+        return json({
+          success: true,
+          settings
+        });
+      }
+
+
+      /* ===================================================
+         SETTING UPDATE
+      =================================================== */
+
+      if (
+        request.method === "PUT" &&
+        path.startsWith(
+          "/api/settings/"
+        )
+      ) {
+
+        const key =
+          decodeURIComponent(
+            path.replace(
+              "/api/settings/",
+              ""
+            )
+          );
+
+
+        if (!key) {
+
+          return json(
+            {
+              error:
+                "Setting key required"
+            },
+            400
+          );
+        }
+
+
+        const body =
+          await readJSON(request);
+
+
+        const setting =
+          await saveSetting(
+            env.DB,
+            key,
+            body.value
+          );
+
+
+        await writeAuditLog(
+          env.DB,
+          {
+            action:
+              "SETTING_UPDATE",
+
+            entityType:
+              "setting",
+
+            entityId:
+              key,
+
+            details: {
+              value_changed:
+                true
+            }
+          }
+        );
+
+
+        return json({
+          success: true,
+          setting
+        });
+      }
+
+
+      /* ===================================================
+         AUDIT LOG
+      =================================================== */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/audit-log"
+      ) {
+
+        const limit =
+          Number(
+            url.searchParams
+              .get("limit") ||
+            100
+          );
+
+
+        const offset =
+          Number(
+            url.searchParams
+              .get("offset") ||
+            0
+          );
+
+
+        const logs =
+          await getAuditLogs(
+            env.DB,
+            {
+              limit,
+              offset
+            }
+          );
+
+
+        return json({
+          success: true,
+          logs
+        });
+      }
+
+
+      /* ===================================================
+         BACKUP
+      =================================================== */
+
+      if (
+        request.method === "GET" &&
+        path === "/api/backup"
+      ) {
+
+        const backup =
+          await createBackup(
+            env.DB
+          );
+
+
+        await writeAuditLog(
+          env.DB,
+          {
+            action:
+              "BACKUP_CREATED",
+
+            entityType:
+              "system",
+
+            details: {
+              format_version:
+                backup.format_version
+            }
+          }
+        );
+
+
+        return json(
+          backup,
+          200,
+          {
+            "Content-Disposition":
+              `attachment; filename="chamak-store-backup-${Date.now()}.json"`
+          }
+        );
+      }
+
+
+      /* ===================================================
+         RESTORE
+      =================================================== */
+
+      if (
+        request.method === "POST" &&
+        path === "/api/restore"
+      ) {
+
+        const body =
+          await readJSON(request);
+
+
+        if (
+          body.confirm_restore !==
+          "RESTORE CHAMAK STORE"
+        ) {
+
+          return json(
+            {
+              error:
+                "Restore confirmation required"
+            },
+            400
+          );
+        }
+
+
+        if (!body.backup) {
+
+          return json(
+            {
+              error:
+                "Backup data is required"
+            },
+            400
+          );
+        }
+
+
+        const result =
+          await restoreBackup(
+            env.DB,
+            body.backup
+          );
+
+
+        await writeAuditLog(
+          env.DB,
+          {
+            action:
+              "BACKUP_RESTORED",
+
+            entityType:
+              "system",
+
+            details: {
+              format_version:
+                body.backup
+                  .format_version
+            }
+          }
+        );
+
+
+        return json({
+          success: true,
+
+          message:
+            "Backup restored successfully",
+
+          ...result
+        });
+      }
+
+
+      /* ===================================================
+         FINAL SYSTEM INTEGRITY
+      =================================================== */
+
+      if (
+        request.method === "GET" &&
+        path ===
+          "/api/system/integrity"
+      ) {
+
+        const result =
+          await runIntegrityCheck(
+            env.DB
+          );
+
+
+        /*
+         * Integrity result সংরক্ষণ।
+         *
+         * system_checks table অবশ্যই
+         * migration-এ থাকতে হবে।
+         */
+
+        await env.DB.prepare(`
+          INSERT INTO system_checks (
+            check_type,
+            status,
+            details,
+            created_at
+          )
+          VALUES (?, ?, ?, ?)
+        `)
+          .bind(
+            "FULL_INTEGRITY",
+
+            result.status,
+
+            JSON.stringify(
+              result
+            ),
+
+            new Date()
+              .toISOString()
+          )
+          .run();
+
+
+        return json(
+          result,
+          result.success
+            ? 200
+            : 409
+        );
+      }
+
+
+      /* ===================================================
+         API 404
+      =================================================== */
+
+      if (
+        path.startsWith(
+          "/api/"
+        )
+      ) {
 
         return json(
           {
             success: false,
-            error: "API endpoint not found",
+
+            error:
+              "API endpoint not found",
+
             path
           },
           404
@@ -2652,11 +3185,48 @@ if (
       }
 
 
-      /* ---------------------------------------------
-         STATIC ASSETS
-      --------------------------------------------- */
+      /* ===================================================
+         STATIC ASSETS + SECURITY HEADERS
+      =================================================== */
 
-      return env.ASSETS.fetch(request);
+      const assetResponse =
+        await env.ASSETS.fetch(
+          request
+        );
+
+
+      const secureResponse =
+        new Response(
+          assetResponse.body,
+          assetResponse
+        );
+
+
+      secureResponse.headers.set(
+        "X-Content-Type-Options",
+        "nosniff"
+      );
+
+
+      secureResponse.headers.set(
+        "X-Frame-Options",
+        "DENY"
+      );
+
+
+      secureResponse.headers.set(
+        "Referrer-Policy",
+        "no-referrer"
+      );
+
+
+      secureResponse.headers.set(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()"
+      );
+
+
+      return secureResponse;
 
     } catch (error) {
 
@@ -2664,6 +3234,7 @@ if (
         "CHAMAK STORE ERROR:",
         error
       );
+
 
       return errorResponse(
         error,
