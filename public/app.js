@@ -289,16 +289,22 @@ async function navigate(page) {
     case "customer-due":
      await renderCustomerDue();
      break;
+        
     case "supplier-due":
      await renderSupplierDue();
      break;
 
-    case "expenses":
-      renderComingSoon(
-        "খরচ",
-        "Shop Expense + Family Expense"
-      );
-      break;
+    case "expense":
+     await renderExpense();
+     break;
+        
+    case "income":
+     await renderOtherIncome();
+     break;
+
+    case "transfer":
+     await renderAccountTransfer();
+     break;    
 
     case "accounts":
       await renderAccounts();
@@ -5324,6 +5330,1108 @@ function showSupplierPaymentMessage(
       "supplierPaymentMessage"
     );
 
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+// ============================================================
+// EXPENSE MODULE
+// ============================================================
+
+let expenseAccounts = [];
+
+async function renderExpense() {
+
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>খরচ</h1>
+        <p>Shop Expense / Family Expense</p>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>খরচের ধরন</label>
+
+          <select id="expenseType">
+            <option value="SHOP">দোকানের খরচ</option>
+            <option value="FAMILY">পারিবারিক খরচ</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Amount</label>
+
+          <input
+            id="expenseAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Payment Account</label>
+
+          <select id="expenseAccount">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Date</label>
+
+          <input
+            id="expenseDate"
+            type="date"
+            value="${todayDate()}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Category</label>
+
+          <input
+            id="expenseCategory"
+            type="text"
+            placeholder="যেমন: বিদ্যুৎ / ভাড়া / খাবার"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Note</label>
+
+          <input
+            id="expenseNote"
+            type="text"
+            placeholder="নোট"
+          >
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+
+        <button
+          id="saveExpenseBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          খরচ সংরক্ষণ
+        </button>
+
+      </div>
+
+      <div id="expenseMessage"></div>
+
+    </section>
+  `;
+
+  await loadExpenseAccounts();
+
+  bindExpenseEvents();
+}
+
+
+async function loadExpenseAccounts() {
+
+  const response =
+    await fetch("/api/accounts");
+
+  if (!response.ok) {
+    throw new Error(
+      "Accounts load failed"
+    );
+  }
+
+  expenseAccounts =
+    await response.json();
+
+  populateExpenseAccounts();
+}
+
+
+function populateExpenseAccounts() {
+
+  const select =
+    document.getElementById(
+      "expenseAccount"
+    );
+
+  if (!select) return;
+
+  const accounts =
+    expenseAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+function bindExpenseEvents() {
+
+  document
+    .getElementById("saveExpenseBtn")
+    ?.addEventListener(
+      "click",
+      saveExpense
+    );
+}
+
+
+async function saveExpense() {
+
+  const type =
+    document.getElementById(
+      "expenseType"
+    ).value;
+
+  const amount =
+    Number(
+      document.getElementById(
+        "expenseAmount"
+      ).value || 0
+    );
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "expenseAccount"
+      ).value || 0
+    );
+
+  const date =
+    document.getElementById(
+      "expenseDate"
+    ).value;
+
+  const category =
+    document.getElementById(
+      "expenseCategory"
+    ).value.trim();
+
+  const note =
+    document.getElementById(
+      "expenseNote"
+    ).value.trim();
+
+
+  if (amount <= 0) {
+
+    showExpenseMessage(
+      "সঠিক Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showExpenseMessage(
+      "Payment Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveExpenseBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/expense",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+          },
+
+          body: JSON.stringify({
+            expense_type: type,
+            amount,
+            payment_account_id:
+              accountId,
+            expense_date: date,
+            category,
+            note
+          })
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Expense save failed"
+      );
+
+    }
+
+
+    showExpenseMessage(
+      "খরচ সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "expenseAmount"
+    ).value = "";
+
+    document.getElementById(
+      "expenseCategory"
+    ).value = "";
+
+    document.getElementById(
+      "expenseNote"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Expense error:",
+      error
+    );
+
+
+    showExpenseMessage(
+      error.message ||
+      "খরচ সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "খরচ সংরক্ষণ";
+  }
+}
+
+
+function showExpenseMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "expenseMessage"
+    );
+
+  if (!element) return;
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+// ============================================================
+// OTHER INCOME MODULE
+// ============================================================
+
+let incomeAccounts = [];
+
+async function renderOtherIncome() {
+
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>অন্যান্য আয়</h1>
+        <p>Business Other Income</p>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Amount</label>
+
+          <input
+            id="incomeAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Receive Account</label>
+
+          <select id="incomeAccount">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Date</label>
+
+          <input
+            id="incomeDate"
+            type="date"
+            value="${todayDate()}"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Category</label>
+
+          <input
+            id="incomeCategory"
+            type="text"
+            placeholder="যেমন: কমিশন"
+          >
+        </div>
+
+        <div class="form-group">
+          <label>Note</label>
+
+          <input
+            id="incomeNote"
+            type="text"
+            placeholder="নোট"
+          >
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+
+        <button
+          id="saveIncomeBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          আয় সংরক্ষণ
+        </button>
+
+      </div>
+
+      <div id="incomeMessage"></div>
+
+    </section>
+  `;
+
+
+  await loadIncomeAccounts();
+
+  bindIncomeEvents();
+}
+
+
+async function loadIncomeAccounts() {
+
+  const response =
+    await fetch("/api/accounts");
+
+  if (!response.ok) {
+    throw new Error(
+      "Accounts load failed"
+    );
+  }
+
+  incomeAccounts =
+    await response.json();
+
+  populateIncomeAccounts();
+}
+
+
+function populateIncomeAccounts() {
+
+  const select =
+    document.getElementById(
+      "incomeAccount"
+    );
+
+  if (!select) return;
+
+
+  const accounts =
+    incomeAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+}
+
+
+function bindIncomeEvents() {
+
+  document
+    .getElementById(
+      "saveIncomeBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveOtherIncome
+    );
+}
+
+
+async function saveOtherIncome() {
+
+  const amount =
+    Number(
+      document.getElementById(
+        "incomeAmount"
+      ).value || 0
+    );
+
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "incomeAccount"
+      ).value || 0
+    );
+
+
+  const date =
+    document.getElementById(
+      "incomeDate"
+    ).value;
+
+
+  const category =
+    document.getElementById(
+      "incomeCategory"
+    ).value.trim();
+
+
+  const note =
+    document.getElementById(
+      "incomeNote"
+    ).value.trim();
+
+
+  if (amount <= 0) {
+
+    showIncomeMessage(
+      "সঠিক Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showIncomeMessage(
+      "Receive Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveIncomeBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/other-income",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+          },
+
+          body: JSON.stringify({
+            amount,
+            account_id:
+              accountId,
+            income_date:
+              date,
+            category,
+            note
+          })
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Income save failed"
+      );
+
+    }
+
+
+    showIncomeMessage(
+      "অন্যান্য আয় সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "incomeAmount"
+    ).value = "";
+
+    document.getElementById(
+      "incomeCategory"
+    ).value = "";
+
+    document.getElementById(
+      "incomeNote"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Income error:",
+      error
+    );
+
+
+    showIncomeMessage(
+      error.message ||
+      "আয় সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "আয় সংরক্ষণ";
+  }
+}
+
+
+function showIncomeMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "incomeMessage"
+    );
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+// ============================================================
+// ACCOUNT TRANSFER MODULE
+// ============================================================
+
+let transferAccounts = [];
+
+async function renderAccountTransfer() {
+
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>Account Transfer</h1>
+        <p>Cash / bKash / Nagad / Rocket</p>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+
+          <label>From Account</label>
+
+          <select id="transferFrom">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>To Account</label>
+
+          <select id="transferTo">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Amount</label>
+
+          <input
+            id="transferAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Date</label>
+
+          <input
+            id="transferDate"
+            type="date"
+            value="${todayDate()}"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Note</label>
+
+          <input
+            id="transferNote"
+            type="text"
+            placeholder="নোট"
+          >
+
+        </div>
+
+      </div>
+
+
+      <div class="form-actions">
+
+        <button
+          id="saveTransferBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          Transfer সংরক্ষণ
+        </button>
+
+      </div>
+
+
+      <div id="transferMessage"></div>
+
+    </section>
+  `;
+
+
+  await loadTransferAccounts();
+
+  bindTransferEvents();
+}
+
+
+async function loadTransferAccounts() {
+
+  const response =
+    await fetch("/api/accounts");
+
+
+  if (!response.ok) {
+
+    throw new Error(
+      "Accounts load failed"
+    );
+
+  }
+
+
+  transferAccounts =
+    await response.json();
+
+
+  populateTransferAccounts();
+}
+
+
+function populateTransferAccounts() {
+
+  const from =
+    document.getElementById(
+      "transferFrom"
+    );
+
+  const to =
+    document.getElementById(
+      "transferTo"
+    );
+
+
+  if (!from || !to) return;
+
+
+  const accounts =
+    transferAccounts.filter(
+      account =>
+        [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        )
+    );
+
+
+  const options = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+    `).join("")}
+  `;
+
+
+  from.innerHTML =
+    options;
+
+  to.innerHTML =
+    options;
+}
+
+
+function bindTransferEvents() {
+
+  document
+    .getElementById(
+      "saveTransferBtn"
+    )
+    ?.addEventListener(
+      "click",
+      saveAccountTransfer
+    );
+}
+
+
+async function saveAccountTransfer() {
+
+  const fromAccountId =
+    Number(
+      document.getElementById(
+        "transferFrom"
+      ).value || 0
+    );
+
+
+  const toAccountId =
+    Number(
+      document.getElementById(
+        "transferTo"
+      ).value || 0
+    );
+
+
+  const amount =
+    Number(
+      document.getElementById(
+        "transferAmount"
+      ).value || 0
+    );
+
+
+  const date =
+    document.getElementById(
+      "transferDate"
+    ).value;
+
+
+  const note =
+    document.getElementById(
+      "transferNote"
+    ).value.trim();
+
+
+  if (!fromAccountId) {
+
+    showTransferMessage(
+      "From Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!toAccountId) {
+
+    showTransferMessage(
+      "To Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (
+    fromAccountId ===
+    toAccountId
+  ) {
+
+    showTransferMessage(
+      "From ও To Account একই হতে পারবে না।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (amount <= 0) {
+
+    showTransferMessage(
+      "সঠিক Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveTransferBtn"
+    );
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/account-transfer",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body: JSON.stringify({
+
+            from_account_id:
+              fromAccountId,
+
+            to_account_id:
+              toAccountId,
+
+            amount,
+
+            transfer_date:
+              date,
+
+            note
+
+          })
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Transfer save failed"
+      );
+
+    }
+
+
+    showTransferMessage(
+      "Account Transfer সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "transferAmount"
+    ).value = "";
+
+    document.getElementById(
+      "transferNote"
+    ).value = "";
+
+
+  } catch (error) {
+
+    console.error(
+      "Transfer error:",
+      error
+    );
+
+
+    showTransferMessage(
+      error.message ||
+      "Transfer সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "Transfer সংরক্ষণ";
+  }
+}
+
+
+function showTransferMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "transferMessage"
+    );
 
   if (!element) return;
 
