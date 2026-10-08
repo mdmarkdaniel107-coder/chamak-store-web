@@ -289,12 +289,9 @@ async function navigate(page) {
     case "customer-due":
      await renderCustomerDue();
      break;
-    case "supplierDue":
-      renderComingSoon(
-        "সাপ্লায়ার বাকি",
-        "Supplier Due + Payment + Ledger"
-      );
-      break;
+    case "supplier-due":
+     await renderSupplierDue();
+     break;
 
     case "expenses":
       renderComingSoon(
@@ -4304,6 +4301,1027 @@ function showCollectionMessage(
   const element =
     document.getElementById(
       "collectionMessage"
+    );
+
+
+  if (!element) return;
+
+
+  element.innerHTML = `
+    <div class="alert ${type}">
+      ${escapeHtml(message)}
+    </div>
+  `;
+}
+
+// ============================================================
+// SUPPLIER DUE MODULE
+// ============================================================
+
+let supplierDueList = [];
+let supplierDueAccounts = [];
+let selectedSupplierDue = null;
+
+
+// ============================================================
+// RENDER SUPPLIER DUE
+// ============================================================
+
+async function renderSupplierDue() {
+
+  app.innerHTML = `
+    <section class="page-header">
+      <div>
+        <h1>Supplier Due</h1>
+        <p>Supplier Payable, Payment ও Ledger</p>
+      </div>
+    </section>
+
+    <section class="card">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label>Supplier Search</label>
+
+          <input
+            id="supplierDueSearch"
+            type="text"
+            placeholder="নাম / ফোন দিয়ে খুঁজুন..."
+          >
+        </div>
+
+      </div>
+
+    </section>
+
+
+    <section class="card">
+
+      <div class="section-title">
+        <h2>Supplier Due List</h2>
+      </div>
+
+      <div id="supplierDueList">
+        <div class="empty-state">
+          Loading...
+        </div>
+      </div>
+
+    </section>
+
+
+    <section
+      id="supplierDueDetails"
+      class="card"
+      style="display:none;"
+    >
+
+      <div class="section-title">
+        <h2 id="selectedSupplierName">
+          Supplier
+        </h2>
+      </div>
+
+
+      <div class="summary-grid">
+
+        <div class="summary-card">
+          <span>Total Purchase Due</span>
+
+          <strong id="supplierTotalDue">
+            ৳0.00
+          </strong>
+        </div>
+
+
+        <div class="summary-card">
+          <span>Total Payment</span>
+
+          <strong id="supplierPaymentTotal">
+            ৳0.00
+          </strong>
+        </div>
+
+
+        <div class="summary-card">
+          <span>Current Due</span>
+
+          <strong id="supplierCurrentDue">
+            ৳0.00
+          </strong>
+        </div>
+
+      </div>
+
+
+      <hr>
+
+
+      <div class="section-title">
+        <h2>Supplier Payment</h2>
+      </div>
+
+
+      <div class="form-grid">
+
+        <div class="form-group">
+
+          <label>Payment Amount</label>
+
+          <input
+            id="supplierPaymentAmount"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Payment Account</label>
+
+          <select id="supplierPaymentAccount">
+            <option value="">
+              Account নির্বাচন
+            </option>
+          </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Date</label>
+
+          <input
+            id="supplierPaymentDate"
+            type="date"
+            value="${todayDate()}"
+          >
+
+        </div>
+
+
+        <div class="form-group">
+
+          <label>Note</label>
+
+          <input
+            id="supplierPaymentNote"
+            type="text"
+            placeholder="Payment note"
+          >
+
+        </div>
+
+      </div>
+
+
+      <div class="form-actions">
+
+        <button
+          id="saveSupplierPaymentBtn"
+          class="btn btn-primary"
+          type="button"
+        >
+          Supplier Payment সংরক্ষণ
+        </button>
+
+      </div>
+
+
+      <div id="supplierPaymentMessage"></div>
+
+
+      <hr>
+
+
+      <div class="section-title">
+        <h2>Supplier Ledger</h2>
+      </div>
+
+
+      <div id="supplierLedger">
+
+        <div class="empty-state">
+          Supplier নির্বাচন করুন।
+        </div>
+
+      </div>
+
+    </section>
+  `;
+
+
+  await loadSupplierDueData();
+
+  bindSupplierDueEvents();
+
+  renderSupplierDueList();
+}
+
+
+// ============================================================
+// LOAD DATA
+// ============================================================
+
+async function loadSupplierDueData() {
+
+  const [
+    suppliersResponse,
+    accountsResponse
+  ] = await Promise.all([
+
+    fetch("/api/suppliers"),
+
+    fetch("/api/accounts")
+
+  ]);
+
+
+  if (!suppliersResponse.ok) {
+
+    throw new Error(
+      "Supplier data load failed"
+    );
+
+  }
+
+
+  if (!accountsResponse.ok) {
+
+    throw new Error(
+      "Account data load failed"
+    );
+
+  }
+
+
+  supplierDueList =
+    await suppliersResponse.json();
+
+
+  supplierDueAccounts =
+    await accountsResponse.json();
+
+
+  populateSupplierPaymentAccounts();
+}
+
+
+// ============================================================
+// PAYMENT ACCOUNTS
+// ============================================================
+
+function populateSupplierPaymentAccounts() {
+
+  const select =
+    document.getElementById(
+      "supplierPaymentAccount"
+    );
+
+
+  if (!select) return;
+
+
+  const accounts =
+    supplierDueAccounts.filter(
+      account => {
+
+        return [
+          1000,
+          1010,
+          1020,
+          1030
+        ].includes(
+          Number(account.code)
+        );
+
+      }
+    );
+
+
+  select.innerHTML = `
+    <option value="">
+      Account নির্বাচন
+    </option>
+
+    ${accounts.map(account => `
+
+      <option value="${account.id}">
+        ${escapeHtml(account.name)}
+      </option>
+
+    `).join("")}
+  `;
+}
+
+
+// ============================================================
+// EVENTS
+// ============================================================
+
+function bindSupplierDueEvents() {
+
+  const search =
+    document.getElementById(
+      "supplierDueSearch"
+    );
+
+
+  search?.addEventListener(
+    "input",
+    renderSupplierDueList
+  );
+
+
+  const button =
+    document.getElementById(
+      "saveSupplierPaymentBtn"
+    );
+
+
+  button?.addEventListener(
+    "click",
+    saveSupplierPayment
+  );
+}
+
+
+// ============================================================
+// SUPPLIER DUE LIST
+// ============================================================
+
+function renderSupplierDueList() {
+
+  const container =
+    document.getElementById(
+      "supplierDueList"
+    );
+
+
+  if (!container) return;
+
+
+  const searchValue =
+    (
+      document.getElementById(
+        "supplierDueSearch"
+      )?.value || ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+  const filtered =
+    supplierDueList.filter(
+      supplier => {
+
+        const name =
+          String(
+            supplier.name || ""
+          ).toLowerCase();
+
+
+        const phone =
+          String(
+            supplier.phone || ""
+          ).toLowerCase();
+
+
+        const due =
+          Number(
+            supplier.current_due || 0
+          );
+
+
+        return (
+          (
+            name.includes(searchValue) ||
+            phone.includes(searchValue)
+          ) &&
+          due > 0
+        );
+
+      }
+    );
+
+
+  if (!filtered.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো Supplier Due পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>#</th>
+            <th>Supplier</th>
+            <th>Phone</th>
+            <th>Current Due</th>
+            <th>Action</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${filtered.map(
+            (supplier, index) => `
+
+            <tr>
+
+              <td>
+                ${index + 1}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  supplier.name
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  supplier.phone || ""
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  supplier.current_due
+                )}
+              </td>
+
+              <td>
+
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm"
+                  data-supplier-due="${supplier.id}"
+                >
+                  View
+                </button>
+
+              </td>
+
+            </tr>
+
+          `
+          ).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+
+
+  container
+    .querySelectorAll(
+      "[data-supplier-due]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        () => {
+
+          const supplierId =
+            Number(
+              button.dataset.supplierDue
+            );
+
+
+          selectSupplierDue(
+            supplierId
+          );
+
+        }
+      );
+
+    });
+}
+
+
+// ============================================================
+// SELECT SUPPLIER
+// ============================================================
+
+async function selectSupplierDue(
+  supplierId
+) {
+
+  selectedSupplierDue =
+    supplierDueList.find(
+      supplier =>
+        Number(supplier.id) ===
+        Number(supplierId)
+    );
+
+
+  if (!selectedSupplierDue) {
+    return;
+  }
+
+
+  const details =
+    document.getElementById(
+      "supplierDueDetails"
+    );
+
+
+  if (details) {
+
+    details.style.display =
+      "block";
+
+  }
+
+
+  document.getElementById(
+    "selectedSupplierName"
+  ).textContent =
+    selectedSupplierDue.name;
+
+
+  document.getElementById(
+    "supplierCurrentDue"
+  ).textContent =
+    `৳${formatMoney(
+      selectedSupplierDue.current_due
+    )}`;
+
+
+  await loadSupplierLedger(
+    supplierId
+  );
+}
+
+
+// ============================================================
+// SUPPLIER LEDGER
+// ============================================================
+
+async function loadSupplierLedger(
+  supplierId
+) {
+
+  const container =
+    document.getElementById(
+      "supplierLedger"
+    );
+
+
+  if (!container) return;
+
+
+  container.innerHTML = `
+    <div class="empty-state">
+      Ledger loading...
+    </div>
+  `;
+
+
+  try {
+
+    const response =
+      await fetch(
+        `/api/suppliers/${supplierId}/ledger`
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Supplier ledger load failed"
+      );
+
+    }
+
+
+    renderSupplierLedger(
+      result
+    );
+
+
+  } catch (error) {
+
+    console.error(
+      "Supplier ledger error:",
+      error
+    );
+
+
+    container.innerHTML = `
+      <div class="alert error">
+        ${escapeHtml(
+          error.message
+        )}
+      </div>
+    `;
+
+  }
+}
+
+
+// ============================================================
+// RENDER SUPPLIER LEDGER
+// ============================================================
+
+function renderSupplierLedger(
+  result
+) {
+
+  const container =
+    document.getElementById(
+      "supplierLedger"
+    );
+
+
+  if (!container) return;
+
+
+  const entries =
+    result.entries || [];
+
+
+  const totalDue =
+    Number(
+      result.total_due || 0
+    );
+
+
+  const totalPayment =
+    Number(
+      result.total_payment || 0
+    );
+
+
+  document.getElementById(
+    "supplierTotalDue"
+  ).textContent =
+    `৳${formatMoney(totalDue)}`;
+
+
+  document.getElementById(
+    "supplierPaymentTotal"
+  ).textContent =
+    `৳${formatMoney(
+      totalPayment
+    )}`;
+
+
+  document.getElementById(
+    "supplierCurrentDue"
+  ).textContent =
+    `৳${formatMoney(
+      result.current_due || 0
+    )}`;
+
+
+  if (!entries.length) {
+
+    container.innerHTML = `
+      <div class="empty-state">
+        কোনো Supplier ledger পাওয়া যায়নি।
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML = `
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Reference</th>
+            <th>Credit</th>
+            <th>Debit</th>
+            <th>Balance</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          ${entries.map(
+            entry => `
+
+            <tr>
+
+              <td>
+                ${escapeHtml(
+                  entry.date || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  entry.type || ""
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  entry.reference || ""
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.credit || 0
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.debit || 0
+                )}
+              </td>
+
+              <td>
+                ৳${formatMoney(
+                  entry.balance || 0
+                )}
+              </td>
+
+            </tr>
+
+          `
+          ).join("")}
+
+        </tbody>
+
+      </table>
+
+    </div>
+  `;
+}
+
+
+// ============================================================
+// SAVE SUPPLIER PAYMENT
+// ============================================================
+
+async function saveSupplierPayment() {
+
+  if (!selectedSupplierDue) {
+
+    showSupplierPaymentMessage(
+      "প্রথমে Supplier নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const amount =
+    Number(
+      document.getElementById(
+        "supplierPaymentAmount"
+      ).value || 0
+    );
+
+
+  const accountId =
+    Number(
+      document.getElementById(
+        "supplierPaymentAccount"
+      ).value || 0
+    );
+
+
+  const date =
+    document.getElementById(
+      "supplierPaymentDate"
+    ).value;
+
+
+  const note =
+    document.getElementById(
+      "supplierPaymentNote"
+    ).value.trim();
+
+
+  const currentDue =
+    Number(
+      selectedSupplierDue.current_due || 0
+    );
+
+
+  if (amount <= 0) {
+
+    showSupplierPaymentMessage(
+      "Payment Amount দিন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (amount > currentDue) {
+
+    showSupplierPaymentMessage(
+      "Payment Amount বর্তমান Supplier Due-এর চেয়ে বেশি হতে পারবে না।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  if (!accountId) {
+
+    showSupplierPaymentMessage(
+      "Payment Account নির্বাচন করুন।",
+      "error"
+    );
+
+    return;
+  }
+
+
+  const button =
+    document.getElementById(
+      "saveSupplierPaymentBtn"
+    );
+
+
+  const payload = {
+
+    supplier_id:
+      Number(
+        selectedSupplierDue.id
+      ),
+
+    amount,
+
+    payment_account_id:
+      accountId,
+
+    payment_date:
+      date,
+
+    note
+
+  };
+
+
+  try {
+
+    button.disabled = true;
+
+    button.textContent =
+      "সংরক্ষণ হচ্ছে...";
+
+
+    const response =
+      await fetch(
+        "/api/transactions/supplier-payment",
+        {
+
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "Idempotency-Key":
+              crypto.randomUUID()
+
+          },
+
+          body:
+            JSON.stringify(payload)
+
+        }
+      );
+
+
+    const result =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        result.error ||
+        "Supplier payment save failed"
+      );
+
+    }
+
+
+    showSupplierPaymentMessage(
+      "Supplier Payment সফলভাবে সংরক্ষণ হয়েছে।",
+      "success"
+    );
+
+
+    document.getElementById(
+      "supplierPaymentAmount"
+    ).value = "";
+
+
+    document.getElementById(
+      "supplierPaymentNote"
+    ).value = "";
+
+
+    await loadSupplierDueData();
+
+
+    selectedSupplierDue =
+      supplierDueList.find(
+        supplier =>
+          Number(supplier.id) ===
+          Number(
+            selectedSupplierDue.id
+          )
+      );
+
+
+    await selectSupplierDue(
+      selectedSupplierDue.id
+    );
+
+
+    renderSupplierDueList();
+
+
+  } catch (error) {
+
+    console.error(
+      "Supplier payment error:",
+      error
+    );
+
+
+    showSupplierPaymentMessage(
+      error.message ||
+      "Supplier payment সংরক্ষণ করা যায়নি।",
+      "error"
+    );
+
+
+  } finally {
+
+    button.disabled = false;
+
+    button.textContent =
+      "Supplier Payment সংরক্ষণ";
+
+  }
+}
+
+
+// ============================================================
+// MESSAGE
+// ============================================================
+
+function showSupplierPaymentMessage(
+  message,
+  type = "error"
+) {
+
+  const element =
+    document.getElementById(
+      "supplierPaymentMessage"
     );
 
 
