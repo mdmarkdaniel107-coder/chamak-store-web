@@ -11,7 +11,22 @@ import {
   createStockAdjustment,
   createAccountTransfer
 } from "./services/transactionEngine.js";
+import {
+  createProduct,
+  getProduct,
+  updateProduct,
+  deleteProduct,
 
+  createCustomer,
+  getCustomer,
+  updateCustomer,
+  deleteCustomer,
+
+  createSupplier,
+  getSupplier,
+  updateSupplier,
+  deleteSupplier
+} from "./services/masterDataService.js";
 
 /* =========================================================
    RESPONSE HELPERS
@@ -793,6 +808,295 @@ export default {
           url
         );
       }
+
+      /* =========================================================
+   PRODUCT CREATE
+========================================================= */
+
+if (
+  request.method === "POST" &&
+  path === "/api/products"
+) {
+
+  const body =
+    await readJSON(request);
+
+  return json(
+    await createProduct(
+      env.DB,
+      {
+        sku: body.sku,
+        name: body.name,
+        unit: body.unit,
+        purchasePrice:
+          body.purchase_price ?? 0,
+        salePrice:
+          body.sale_price ?? 0,
+        lowStockLevel:
+          body.low_stock_level ?? 0
+      }
+    )
+  );
+}
+
+
+/* =========================================================
+   PRODUCT GET ONE
+========================================================= */
+
+if (
+  request.method === "GET" &&
+  /^\/api\/products\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  return json({
+    success: true,
+    product:
+      await getProduct(
+        env.DB,
+        id
+      )
+  });
+}
+
+
+/* =========================================================
+   PRODUCT UPDATE
+========================================================= */
+
+if (
+  request.method === "PUT" &&
+  /^\/api\/products\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  const body =
+    await readJSON(request);
+
+  return json(
+    await updateProduct(
+      env.DB,
+      id,
+      body
+    )
+  );
+}
+
+
+/* =========================================================
+   PRODUCT DELETE
+========================================================= */
+
+if (
+  request.method === "DELETE" &&
+  /^\/api\/products\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  return json(
+    await deleteProduct(
+      env.DB,
+      id
+    )
+  );
+}
+
+
+/* =========================================================
+   CUSTOMER CREATE
+========================================================= */
+
+if (
+  request.method === "POST" &&
+  path === "/api/customers"
+) {
+
+  const body =
+    await readJSON(request);
+
+  return json(
+    await createCustomer(
+      env.DB,
+      {
+        name: body.name,
+        phone: body.phone,
+        address: body.address
+      }
+    )
+  );
+}
+
+
+/* =========================================================
+   CUSTOMER GET ONE
+========================================================= */
+
+if (
+  request.method === "GET" &&
+  /^\/api\/customers\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  return json({
+    success: true,
+    customer:
+      await getCustomer(
+        env.DB,
+        id
+      )
+  });
+}
+
+
+/* =========================================================
+   CUSTOMER UPDATE
+========================================================= */
+
+if (
+  request.method === "PUT" &&
+  /^\/api\/customers\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  const body =
+    await readJSON(request);
+
+  return json(
+    await updateCustomer(
+      env.DB,
+      id,
+      body
+    )
+  );
+}
+
+
+/* =========================================================
+   CUSTOMER DELETE
+========================================================= */
+
+if (
+  request.method === "DELETE" &&
+  /^\/api\/customers\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  return json(
+    await deleteCustomer(
+      env.DB,
+      id
+    )
+  );
+}
+
+
+/* =========================================================
+   SUPPLIER CREATE
+========================================================= */
+
+if (
+  request.method === "POST" &&
+  path === "/api/suppliers"
+) {
+
+  const body =
+    await readJSON(request);
+
+  return json(
+    await createSupplier(
+      env.DB,
+      {
+        name: body.name,
+        phone: body.phone,
+        address: body.address
+      }
+    )
+  );
+}
+
+
+/* =========================================================
+   SUPPLIER GET ONE
+========================================================= */
+
+if (
+  request.method === "GET" &&
+  /^\/api\/suppliers\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  return json({
+    success: true,
+    supplier:
+      await getSupplier(
+        env.DB,
+        id
+      )
+  });
+}
+
+
+/* =========================================================
+   SUPPLIER UPDATE
+========================================================= */
+
+if (
+  request.method === "PUT" &&
+  /^\/api\/suppliers\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  const body =
+    await readJSON(request);
+
+  return json(
+    await updateSupplier(
+      env.DB,
+      id,
+      body
+    )
+  );
+}
+
+
+/* =========================================================
+   SUPPLIER DELETE
+========================================================= */
+
+if (
+  request.method === "DELETE" &&
+  /^\/api\/suppliers\/[^/]+$/.test(path)
+) {
+
+  const id =
+    path.split("/").pop();
+
+  return json(
+    await deleteSupplier(
+      env.DB,
+      id
+    )
+  );
+}
+
+      
 
 
       /* ---------------------------------------------
