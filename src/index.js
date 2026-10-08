@@ -494,7 +494,223 @@ async function stockVerification(db, url) {
     products
   });
 }
+// ============================================================
+// SUPPLIER LEDGER
+// ============================================================
 
+if (
+  pathname.match(
+    /^\/api\/suppliers\/\d+\/ledger$/
+  ) &&
+  request.method === "GET"
+) {
+
+  const supplierId =
+    Number(
+      pathname.split("/")[3]
+    );
+
+
+  if (!supplierId) {
+
+    return jsonResponse(
+      {
+        error:
+          "Invalid supplier ID"
+      },
+      400,
+      corsHeaders
+    );
+
+  }
+
+
+  try {
+
+    const supplier =
+      await env.DB
+        .prepare(`
+          SELECT
+            id,
+            name,
+            phone,
+            current_due
+          FROM suppliers
+          WHERE id = ?
+        `)
+        .bind(supplierId)
+        .first();
+
+
+    if (!supplier) {
+
+      return jsonResponse(
+        {
+          error:
+            "Supplier not found"
+        },
+        404,
+        corsHeaders
+      );
+
+    }
+
+
+    const purchases =
+      await env.DB
+        .prepare(`
+          SELECT
+            p.id,
+            p.purchase_date AS date,
+            'PURCHASE' AS type,
+            COALESCE(
+              p.reference,
+              ''
+            ) AS reference,
+            COALESCE(
+              p.total_amount,
+              0
+            ) AS credit,
+            0 AS debit
+          FROM purchases p
+          WHERE p.supplier_id = ?
+
+          ORDER BY
+            p.purchase_date ASC,
+            p.id ASC
+        `)
+        .bind(supplierId)
+        .all();
+
+
+    const payments =
+      await env.DB
+        .prepare(`
+          SELECT
+            sp.id,
+            sp.payment_date AS date,
+            'PAYMENT' AS type,
+            COALESCE(
+              sp.note,
+              ''
+            ) AS reference,
+            0 AS credit,
+            COALESCE(
+              sp.amount,
+              0
+            ) AS debit
+          FROM supplier_payments sp
+          WHERE sp.supplier_id = ?
+
+          ORDER BY
+            sp.payment_date ASC,
+            sp.id ASC
+        `)
+        .bind(supplierId)
+        .all();
+
+
+    const entries = [
+      ...(purchases.results || []),
+      ...(payments.results || [])
+    ]
+      .sort((a, b) => {
+
+        const dateCompare =
+          String(a.date || "")
+            .localeCompare(
+              String(b.date || "")
+            );
+
+
+        if (dateCompare !== 0) {
+          return dateCompare;
+        }
+
+
+        return Number(a.id) -
+          Number(b.id);
+
+      });
+
+
+    let balance = 0;
+
+
+    for (const entry of entries) {
+
+      balance +=
+        Number(entry.credit || 0);
+
+      balance -=
+        Number(entry.debit || 0);
+
+      entry.balance =
+        balance;
+
+    }
+
+
+    const totalDue =
+      entries.reduce(
+        (sum, entry) =>
+          sum +
+          Number(
+            entry.credit || 0
+          ),
+        0
+      );
+
+
+    const totalPayment =
+      entries.reduce(
+        (sum, entry) =>
+          sum +
+          Number(
+            entry.debit || 0
+          ),
+        0
+      );
+
+
+    return jsonResponse(
+      {
+        supplier,
+        entries,
+        total_due:
+          totalDue,
+        total_payment:
+          totalPayment,
+        current_due:
+          Number(
+            supplier.current_due || 0
+          )
+      },
+      200,
+      corsHeaders
+    );
+
+
+  } catch (error) {
+
+    console.error(
+      "Supplier ledger error:",
+      error
+    );
+
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Supplier ledger failed"
+      },
+      500,
+      corsHeaders
+    );
+
+  }
+}
 
 /* =========================================================
    TRANSACTION ROUTER
