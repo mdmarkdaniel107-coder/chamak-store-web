@@ -27,6 +27,15 @@ import {
   updateSupplier,
   deleteSupplier
 } from "./services/masterDataService.js";
+import {
+  getSettings,
+  getSetting,
+  saveSetting,
+  writeAuditLog,
+  getAuditLogs,
+  createBackup,
+  restoreBackup
+} from "./services/systemService.js";
 
 /* =========================================================
    RESPONSE HELPERS
@@ -1292,6 +1301,315 @@ if (
       corsHeaders
     );
 
+  }
+}
+
+// ============================================================
+// STEP 13 — SETTINGS API
+// ============================================================
+
+if (
+  request.method === "GET" &&
+  pathname === "/api/settings"
+) {
+
+  try {
+
+    const settings =
+      await getSettings(env.DB);
+
+    return jsonResponse({
+      success: true,
+      settings
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Settings GET error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Failed to load settings"
+      },
+      500
+    );
+  }
+}
+
+
+if (
+  request.method === "PUT" &&
+  pathname.startsWith("/api/settings/")
+) {
+
+  try {
+
+    const key =
+      decodeURIComponent(
+        pathname.replace(
+          "/api/settings/",
+          ""
+        )
+      );
+
+    const body =
+      await request.json();
+
+    const setting =
+      await saveSetting(
+        env.DB,
+        key,
+        body.value
+      );
+
+
+    await writeAuditLog(
+      env.DB,
+      {
+        action: "SETTING_UPDATE",
+        entityType: "setting",
+        entityId: key,
+        details: {
+          value_changed: true
+        }
+      }
+    );
+
+
+    return jsonResponse({
+      success: true,
+      setting
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Settings PUT error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Failed to save setting"
+      },
+      400
+    );
+  }
+}
+
+
+// ============================================================
+// AUDIT LOG API
+// ============================================================
+
+if (
+  request.method === "GET" &&
+  pathname === "/api/audit-log"
+) {
+
+  try {
+
+    const url =
+      new URL(request.url);
+
+    const limit =
+      url.searchParams.get("limit") || 100;
+
+    const offset =
+      url.searchParams.get("offset") || 0;
+
+
+    const logs =
+      await getAuditLogs(
+        env.DB,
+        {
+          limit,
+          offset
+        }
+      );
+
+
+    return jsonResponse({
+      success: true,
+      logs
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Audit log error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Failed to load audit log"
+      },
+      500
+    );
+  }
+}
+
+
+// ============================================================
+// BACKUP API
+// ============================================================
+
+if (
+  request.method === "GET" &&
+  pathname === "/api/backup"
+) {
+
+  try {
+
+    const backup =
+      await createBackup(
+        env.DB
+      );
+
+
+    await writeAuditLog(
+      env.DB,
+      {
+        action: "BACKUP_CREATED",
+        entityType: "system",
+        details: {
+          format_version:
+            backup.format_version
+        }
+      }
+    );
+
+
+    return jsonResponse(
+      backup,
+      200,
+      {
+        "Content-Disposition":
+          `attachment; filename="chamak-store-backup-${Date.now()}.json"`
+      }
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Backup error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Backup failed"
+      },
+      500
+    );
+  }
+}
+
+
+// ============================================================
+// RESTORE API
+// ============================================================
+
+if (
+  request.method === "POST" &&
+  pathname === "/api/restore"
+) {
+
+  try {
+
+    const body =
+      await request.json();
+
+
+    /*
+     * Extra protection.
+     *
+     * Client must explicitly send:
+     *
+     * confirm_restore = "RESTORE CHAMAK STORE"
+     */
+
+    if (
+      body.confirm_restore !==
+      "RESTORE CHAMAK STORE"
+    ) {
+
+      return jsonResponse(
+        {
+          error:
+            "Restore confirmation required"
+        },
+        400
+      );
+    }
+
+
+    if (!body.backup) {
+
+      return jsonResponse(
+        {
+          error:
+            "Backup data is required"
+        },
+        400
+      );
+    }
+
+
+    const result =
+      await restoreBackup(
+        env.DB,
+        body.backup
+      );
+
+
+    await writeAuditLog(
+      env.DB,
+      {
+        action: "BACKUP_RESTORED",
+        entityType: "system",
+        details: {
+          format_version:
+            body.backup.format_version
+        }
+      }
+    );
+
+
+    return jsonResponse({
+      success: true,
+      message:
+        "Backup restored successfully",
+      ...result
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Restore error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        error:
+          error.message ||
+          "Restore failed"
+      },
+      400
+    );
   }
 }
 
