@@ -1,0 +1,14 @@
+name = "chamak-store-web"
+main = "src/index.js"
+compatibility_date = "2026-10-08"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chamak-store-web-db"
+database_id = "94ab096e-7b51-4d6e-a2b1-bd55e94c44f9"
+migrations_dir = "migrations"
